@@ -1,0 +1,6 @@
+[build]
+buildCommand = "npm run build:backend"
+
+[deploy]
+startCommand = "ls dist/ && ls dist/controllers/ && node dist/index.js"
+restartPolicyType = "ALWAYS"
