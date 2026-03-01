@@ -28,6 +28,7 @@ export const securityGuards = pgTable("security_guards", {
 export const courses = pgTable("courses", {
     id: varchar("id", { length: 255 }).primaryKey(),
     title: text("title").notNull(),
+    slug: text("slug").unique(),
     description: text("description"),
     thumbnail: text("thumbnail"),
     status: text("status").default("draft"),
