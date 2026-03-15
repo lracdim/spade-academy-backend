@@ -1,1 +1,33 @@
+# Dependencies
 node_modules
+
+# Build output
+dist
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Drizzle migrations metadata
+drizzle/meta
+
+# Uploaded files (videos, images, certificates)
+public/uploads
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode
+.idea
+
+# TypeScript cache
+*.tsbuildinfo
