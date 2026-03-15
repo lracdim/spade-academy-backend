@@ -24,16 +24,23 @@ const port: number = Number(PORT) || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ CORS
-app.options('*', cors({
-  origin: [
-    'https://academy.spadesecurityservices.com', // ← ADD THIS
-    'https://spade-academy-frontend-production.up.railway.app',
-    'https://spade-academy-backend-production.up.railway.app',
-    'http://localhost:5173'
-  ],
+const allowedOrigins = [
+  'https://academy.spadesecurityservices.com',
+  'https://spade-academy-frontend-production.up.railway.app',
+  'https://spade-academy-backend-production.up.railway.app',
+  'http://localhost:5173'
+];
+
+const corsOptions = {
+  origin: allowedOrigins,
   credentials: true
-}));
+};
+
+// ✅ CORS middleware
+app.use(cors(corsOptions));
+
+// ✅ Handle preflight OPTIONS requests
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
@@ -52,10 +59,10 @@ app.use('/api/progress', progressRoutes);
 app.use('/api/certificates', certificateRoutes);
 
 app.get('/', (req, res) => {
-    res.send('Spade Academy LMS API');
+  res.send('Spade Academy LMS API');
 });
 
 // ✅ Bind to 0.0.0.0 — required for Railway
 app.listen(port, '0.0.0.0', () => {
-    console.log(`Server is running on port ${port}`);
+  console.log(`Server is running on port ${port}`);
 });
