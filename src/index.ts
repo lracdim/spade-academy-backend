@@ -36,16 +36,14 @@ const corsOptions = {
   credentials: true
 };
 
-// ✅ CORS middleware
 app.use(cors(corsOptions));
 
-// ✅ Handle preflight OPTIONS requests
-app.options('*', cors(corsOptions));
+// ✅ Fixed: use '/{*path}' instead of '*'
+app.options('/{*path}', cors(corsOptions));
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// ✅ Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
 app.use('/api/admin/courses', courseRoutes);
@@ -62,7 +60,6 @@ app.get('/', (req, res) => {
   res.send('Spade Academy LMS API');
 });
 
-// ✅ Bind to 0.0.0.0 — required for Railway
 app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
 });
