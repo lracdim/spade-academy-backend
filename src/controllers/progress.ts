@@ -1,12 +1,22 @@
 import { db } from '../db/index.js';
-import { userModuleProgress, modules, courses, quizzes, quizAttempts, certificates } from '../db/schema.js';
+import { 
+    userModuleProgress, 
+    modules, 
+    courses, 
+    quizzes, 
+    quizAttempts, 
+    certificates 
+} from '../db/schema.js';
 import { eq, and, count, inArray, isNotNull, ne } from 'drizzle-orm';
 import { generateCertificateLogic } from './certificate.js';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.js';
 
+// ─────────────────────────────────────────────
+// POST /api/progress/video-watched
+// ─────────────────────────────────────────────
 export const updateVideoProgress = async (req: AuthRequest, res: Response) => {
-    const { moduleId } = req.body;
+    const { moduleId, lastPosition, duration, isCompleted } = req.body;
     const userId = req.user?.id;
 
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -15,45 +25,204 @@ export const updateVideoProgress = async (req: AuthRequest, res: Response) => {
     try {
         const [existing] = await db.select()
             .from(userModuleProgress)
-            .where(and(eq(userModuleProgress.userId, userId), eq(userModuleProgress.moduleId, moduleId)));
+            .where(and(
+                eq(userModuleProgress.userId, userId),
+                eq(userModuleProgress.moduleId, moduleId)
+            ));
 
         if (existing) {
-            await db.update(userModuleProgress)
-                .set({ videoWatched: true, updatedAt: new Date() })
-                .where(eq(userModuleProgress.id, existing.id));
+            if (isCompleted === true) {
+                // ✅ Mark as fully watched
+                await db.update(userModuleProgress)
+                    .set({ 
+                        videoWatched: true, 
+                        lastPosition: Math.floor(lastPosition || 0),
+                        updatedAt: new Date() 
+                    })
+                    .where(eq(userModuleProgress.id, existing.id));
+            } else {
+                // ✅ Heartbeat — only update lastPosition, never downgrade videoWatched
+                if (!existing.videoWatched) {
+                    await db.update(userModuleProgress)
+                        .set({ 
+                            lastPosition: Math.floor(lastPosition || 0),
+                            updatedAt: new Date() 
+                        })
+                        .where(eq(userModuleProgress.id, existing.id));
+                }
+            }
         } else {
+            // ✅ First time — insert new record
             await db.insert(userModuleProgress).values({
                 userId,
                 moduleId,
-                videoWatched: true,
+                videoWatched: isCompleted === true,
+                lastPosition: Math.floor(lastPosition || 0),
             });
         }
 
-        // After updating progress, check if the course is now complete
-        const [module] = await db.select({ courseId: modules.courseId }).from(modules).where(eq(modules.id, moduleId)).limit(1);
-        if (module) {
-            await checkAndGenerateCertificate(userId, module.courseId);
+        // Only check certificate if video was just completed
+        if (isCompleted === true) {
+            const [module] = await db.select({ courseId: modules.courseId })
+                .from(modules)
+                .where(eq(modules.id, moduleId))
+                .limit(1);
+
+            if (module) {
+                await checkAndGenerateCertificate(userId, module.courseId)
+                    .catch(err => console.log('[CertCheck] Not ready yet:', err.message));
+            }
         }
 
-        res.json({ message: 'Progress updated' });
+        return res.json({ message: 'Progress updated' });
     } catch (error) {
         console.error('Update video progress error:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
 };
 
+// ─────────────────────────────────────────────
+// GET /api/progress/my-progress
+// ─────────────────────────────────────────────
+export const getUserProgress = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    try {
+        const allProgress = await db.select({
+            moduleId: userModuleProgress.moduleId,
+            videoWatched: userModuleProgress.videoWatched,
+            lastPosition: userModuleProgress.lastPosition,
+            courseId: modules.courseId,
+            courseTitle: courses.title,
+            duration: modules.duration,
+        })
+        .from(userModuleProgress)
+        .innerJoin(modules, eq(userModuleProgress.moduleId, modules.id))
+        .innerJoin(courses, eq(modules.courseId, courses.id))
+        .where(eq(userModuleProgress.userId, userId));
+
+        // Get all courses with module counts
+        const enrolledCourses = await db.select({
+            courseId: courses.id,
+            courseTitle: courses.title,
+            totalModules: count(modules.id),
+        })
+        .from(courses)
+        .innerJoin(modules, eq(modules.courseId, courses.id))
+        .groupBy(courses.id, courses.title);
+
+        // Build course map
+        const courseMap: Record<string, {
+            courseId: string;
+            courseTitle: string;
+            totalModules: number;
+            watchedModules: number;
+            completionPercent: number;
+        }> = {};
+
+        for (const course of enrolledCourses) {
+            courseMap[course.courseId] = {
+                courseId: course.courseId,
+                courseTitle: course.courseTitle,
+                totalModules: Number(course.totalModules),
+                watchedModules: 0,
+                completionPercent: 0,
+            };
+        }
+
+        for (const row of allProgress) {
+            if (courseMap[row.courseId] && row.videoWatched) {
+                courseMap[row.courseId].watchedModules++;
+            }
+        }
+
+        const result = Object.values(courseMap).map(c => ({
+            ...c,
+            completionPercent: c.totalModules > 0
+                ? Math.round((c.watchedModules / c.totalModules) * 100)
+                : 0
+        }));
+
+        const totalModules = result.reduce((sum, c) => sum + c.totalModules, 0);
+        const watchedModules = result.reduce((sum, c) => sum + c.watchedModules, 0);
+        const overallPercent = totalModules > 0
+            ? Math.round((watchedModules / totalModules) * 100)
+            : 0;
+
+        return res.json({
+            progress: result,
+            overall: {
+                totalModules,
+                watchedModules,
+                overallPercent,
+                activeCourses: result.length,
+            }
+        });
+    } catch (error) {
+        console.error('Get user progress error:', error);
+        return res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// ─────────────────────────────────────────────
+// POST /api/progress/generate-certificate
+// ─────────────────────────────────────────────
+export const manualGenerateCertificate = async (req: AuthRequest, res: Response) => {
+    const { courseId } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!courseId) return res.status(400).json({ message: 'Course ID is required' });
+
+    try {
+        console.log(`[Certificate] Manual generation requested by user ${userId} for course ${courseId}`);
+        await checkAndGenerateCertificate(userId, courseId);
+
+        const [cert] = await db.select()
+            .from(certificates)
+            .where(and(
+                eq(certificates.userId, userId),
+                eq(certificates.courseId, courseId)
+            ))
+            .limit(1);
+
+        if (!cert) {
+            return res.status(404).json({ 
+                message: 'Certificate was not found after generation. Please refresh.' 
+            });
+        }
+
+        return res.json({ message: 'Certificate ready!', certificate: cert });
+    } catch (error: any) {
+        console.error('Manual certificate generation error:', error);
+        if (error.message?.startsWith('Requirements not met:')) {
+            return res.status(400).json({ message: error.message });
+        }
+        return res.status(500).json({ message: error?.message || 'Internal server error' });
+    }
+};
+
+// ─────────────────────────────────────────────
+// HELPER: Check and auto-generate certificate
+// ─────────────────────────────────────────────
 export const checkAndGenerateCertificate = async (userId: string, courseId: string) => {
     try {
-        // 1. Get ALL modules for the course
+        // 1. Get all video modules for the course
         const courseModules = await db.select({ id: modules.id })
             .from(modules)
-            .where(and(eq(modules.courseId, courseId), isNotNull(modules.video), ne(modules.video, '')));
+            .where(and(
+                eq(modules.courseId, courseId),
+                isNotNull(modules.video),
+                ne(modules.video, '')
+            ));
 
         const moduleCount = courseModules.length;
         if (moduleCount === 0) return;
 
-        // 2. Check how many modules have videos watched
         const moduleIds = courseModules.map(m => m.id);
+
+        // 2. Check watched videos
         const [watchedCountResult] = await db.select({ count: count() })
             .from(userModuleProgress)
             .where(and(
@@ -64,7 +233,8 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
 
         const watchedInThisCourse = Number(watchedCountResult?.count || 0);
 
-        const courseQuizzes = await db.select({ id: quizzes.id, moduleId: quizzes.moduleId })
+        // 3. Check passed quizzes
+        const courseQuizzes = await db.select({ id: quizzes.id })
             .from(quizzes)
             .where(inArray(quizzes.moduleId, moduleIds));
 
@@ -87,19 +257,26 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
         console.log(`[CertDebug] Modules: ${moduleCount}, Watched: ${watchedInThisCourse}`);
         console.log(`[CertDebug] Quizzes: ${quizCount}, Passed: ${passedInThisCourse}`);
 
-        // 4. Compare
+        // 4. Validate requirements
         if (watchedInThisCourse < moduleCount) {
-            throw new Error(`Requirements not met: Only ${watchedInThisCourse}/${moduleCount} videos watched.`);
+            throw new Error(
+                `Requirements not met: Only ${watchedInThisCourse}/${moduleCount} videos watched.`
+            );
         }
 
         if (passedInThisCourse < quizCount) {
-            throw new Error(`Requirements not met: Only ${passedInThisCourse}/${quizCount} quizzes passed.`);
+            throw new Error(
+                `Requirements not met: Only ${passedInThisCourse}/${quizCount} quizzes passed.`
+            );
         }
 
-        // Requirements MET. Check if certificate already exists
+        // 5. Generate certificate if not already exists
         const [existingCert] = await db.select()
             .from(certificates)
-            .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)));
+            .where(and(
+                eq(certificates.userId, userId),
+                eq(certificates.courseId, courseId)
+            ));
 
         if (!existingCert) {
             console.log(`[CertDebug] Generating new certificate...`);
@@ -110,34 +287,5 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
     } catch (error: any) {
         console.error('Error in checkAndGenerateCertificate:', error);
         throw error;
-    }
-};
-
-export const manualGenerateCertificate = async (req: AuthRequest, res: Response) => {
-    const { courseId } = req.body;
-    const userId = req.user?.id;
-
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-    if (!courseId) return res.status(400).json({ message: 'Course ID is required' });
-
-    try {
-        console.log(`[Certificate] Manual generation requested by user ${userId} for course ${courseId}`);
-        await checkAndGenerateCertificate(userId, courseId);
-
-        const [cert] = await db.select().from(certificates)
-            .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
-            .limit(1);
-
-        if (!cert) {
-            return res.status(404).json({ message: 'Certificate was not found after generation. Please refresh.' });
-        }
-
-        return res.json({ message: 'Certificate ready!', certificate: cert });
-    } catch (error: any) {
-        console.error('Manual certificate generation error:', error);
-        if (error.message.startsWith('Requirements not met:')) {
-            return res.status(400).json({ message: error.message });
-        }
-        res.status(500).json({ message: error?.message || 'Internal server error' });
     }
 };
