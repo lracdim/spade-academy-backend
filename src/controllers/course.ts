@@ -7,7 +7,6 @@ import { deleteFileFromUrl } from '../utils/file.js';
 
 export const getCourses = async (req: AuthRequest, res: Response) => {
     try {
-        // Fetch courses with module and lesson counts in ONE query using SQL
         const coursesWithCounts = await db.execute(sql`
             SELECT 
                 c.id, 
@@ -48,8 +47,10 @@ export const createCourse = async (req: AuthRequest, res: Response) => {
     }
 
     try {
-        // Get the current max order
-        const [maxOrderResult] = await db.select({ maxOrder: sql<number>`MAX(${courses.order})` }).from(courses);
+        const [maxOrderResult] = await db.select({ 
+            maxOrder: sql<number>`MAX(${courses.order})` 
+        }).from(courses);
+        
         const nextOrder = (maxOrderResult?.maxOrder || 0) + 1;
 
         const [newCourse] = await db.insert(courses).values({
@@ -66,6 +67,7 @@ export const createCourse = async (req: AuthRequest, res: Response) => {
         res.status(500).json({ message: 'Internal server error' });
     }
 };
+
 export const updateCourse = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { title, description, isPublished, thumbnail } = req.body;
@@ -79,8 +81,10 @@ export const updateCourse = async (req: AuthRequest, res: Response) => {
 
         const courseId = id as string;
 
-        // Fetch old course data to check for file replacement
-        const [oldCourse] = await db.select().from(courses).where(eq(courses.id, courseId)).limit(1);
+        const [oldCourse] = await db.select()
+            .from(courses)
+            .where(eq(courses.id, courseId))
+            .limit(1);
 
         const [updatedCourse] = await db.update(courses)
             .set(updateData)
@@ -91,7 +95,6 @@ export const updateCourse = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ message: 'Course not found' });
         }
 
-        // Cleanup old thumbnail if replaced
         if (thumbnail && oldCourse?.thumbnail && oldCourse.thumbnail !== thumbnail) {
             deleteFileFromUrl(oldCourse.thumbnail);
         }
@@ -107,59 +110,97 @@ export const deleteCourse = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     try {
-        // Need to delete dependencies first due to foreign keys, or rely on ON DELETE CASCADE.
-        // Assuming no cascade configured right now, let's manually delete lessons, quizzes, modules, certificates related to this course.
-        // For a more robust approach, ON DELETE CASCADE on the schema is preferred.
-        // Modules point to course. Lessons point to module. Quizzes point to module.
-        // For simplicity, we'll try to delete the course and handle FK errors if they exist, 
-// to force deleting modules first.
-
         const courseId = id as string;
 
-        // Fetch course first to get thumbnail
-        const [courseToDelete] = await db.select().from(courses).where(eq(courses.id, courseId)).limit(1);
+        // 1. Fetch course
+        const [courseToDelete] = await db.select()
+            .from(courses)
+            .where(eq(courses.id, courseId))
+            .limit(1);
 
         if (!courseToDelete) {
             return res.status(404).json({ message: 'Course not found' });
         }
 
-        // Fetch related modules to get their videos
-        const courseModules = await db.select({ id: modules.id, video: modules.video }).from(modules).where(eq(modules.courseId, courseId));
+        // 2. Fetch all modules for this course
+        const courseModules = await db.select({
+            id: modules.id,
+            video: modules.video
+        }).from(modules).where(eq(modules.courseId, courseId));
+
         const moduleIds = courseModules.map(m => m.id);
 
-        for (const mod of courseModules) {
-            // Delete lessons
-            await db.delete(lessons).where(eq(lessons.moduleId, mod.id));
-            // Delete quizzes
-            // First fetch quizzes to delete questions
-            const [modQuiz] = await db.select({ id: quizzes.id }).from(quizzes).where(eq(quizzes.moduleId, mod.id));
-            if (modQuiz) {
-                await db.delete(questions).where(eq(questions.quizId, modQuiz.id));
-                await db.delete(quizzes).where(eq(quizzes.id, modQuiz.id));
+        if (moduleIds.length > 0) {
+            // 3. Fetch all quizzes for these modules
+            const courseQuizzes = await db.select({ id: quizzes.id })
+                .from(quizzes)
+                .where(sql`${quizzes.moduleId} = ANY(ARRAY[${sql.join(moduleIds.map(id => sql`${id}::uuid`), sql`, `)}])`);
+
+            const quizIds = courseQuizzes.map(q => q.id);
+
+            if (quizIds.length > 0) {
+                // 4. Delete quiz attempts
+                await db.execute(sql`
+                    DELETE FROM quiz_attempts 
+                    WHERE quiz_id = ANY(ARRAY[${sql.join(quizIds.map(id => sql`${id}::uuid`), sql`, `)}])
+                `);
+
+                // 5. Delete questions
+                await db.execute(sql`
+                    DELETE FROM questions 
+                    WHERE quiz_id = ANY(ARRAY[${sql.join(quizIds.map(id => sql`${id}::uuid`), sql`, `)}])
+                `);
+
+                // 6. Delete quizzes
+                await db.execute(sql`
+                    DELETE FROM quizzes 
+                    WHERE id = ANY(ARRAY[${sql.join(quizIds.map(id => sql`${id}::uuid`), sql`, `)}])
+                `);
             }
 
-            // Delete the video file
-            if (mod.video) {
-                deleteFileFromUrl(mod.video);
+            // 7. Delete user module progress
+            await db.execute(sql`
+                DELETE FROM user_module_progress 
+                WHERE module_id = ANY(ARRAY[${sql.join(moduleIds.map(id => sql`${id}::uuid`), sql`, `)}])
+            `);
+
+            // 8. Delete lessons
+            await db.execute(sql`
+                DELETE FROM lessons 
+                WHERE module_id = ANY(ARRAY[${sql.join(moduleIds.map(id => sql`${id}::uuid`), sql`, `)}])
+            `);
+
+            // 9. Delete video files
+            for (const mod of courseModules) {
+                if (mod.video) deleteFileFromUrl(mod.video);
             }
+
+            // 10. Delete modules
+            await db.execute(sql`
+                DELETE FROM modules 
+                WHERE course_id = ${courseId}::uuid
+            `);
         }
 
-        // Delete modules
-        await db.delete(modules).where(eq(modules.courseId, courseId));
+        // 11. Delete certificates for this course
+        await db.execute(sql`
+            DELETE FROM certificates 
+            WHERE course_id = ${courseId}::uuid
+        `);
 
-        // Delete course
+        // 12. Finally delete the course
         const [deletedCourse] = await db.delete(courses)
             .where(eq(courses.id, courseId))
             .returning();
 
-        // Delete the course thumbnail
+        // 13. Delete thumbnail file
         if (deletedCourse?.thumbnail) {
             deleteFileFromUrl(deletedCourse.thumbnail);
         }
 
-        res.json({ message: 'Course deleted successfully' });
+        return res.json({ message: 'Course deleted successfully' });
     } catch (error) {
         console.error('Delete course error:', error);
-        res.status(500).json({ message: 'Internal server error' });
+        return res.status(500).json({ message: 'Internal server error' });
     }
-};
+}
