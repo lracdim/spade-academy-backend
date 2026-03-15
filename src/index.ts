@@ -26,12 +26,13 @@ const __dirname = path.dirname(__filename);
 
 // ✅ CORS
 app.use(cors({
-    origin: [
-        'https://spade-academy-frontend-production.up.railway.app',
-        'https://spade-academy-backend-production.up.railway.app',
-        'http://localhost:5173'
-    ],
-    credentials: true
+  origin: [
+    'https://academy.spadesecurityservices.com', // ← ADD THIS
+    'https://spade-academy-frontend-production.up.railway.app',
+    'https://spade-academy-backend-production.up.railway.app',
+    'http://localhost:5173'
+  ],
+  credentials: true
 }));
 
 app.use(express.json());
