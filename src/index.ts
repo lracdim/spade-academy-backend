@@ -25,7 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ✅ CORS
-app.use(cors({
+app.options('*', cors({
   origin: [
     'https://academy.spadesecurityservices.com', // ← ADD THIS
     'https://spade-academy-frontend-production.up.railway.app',
