@@ -1,16 +1,16 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import pg from 'pg';
-const { Pool } = pg;
-import * as schema from "./schema.js";
-import * as dotenv from "dotenv";
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pkg from 'pg';
+const { Pool } = pkg;
+import * as schema from './schema.js';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
 const pool = new Pool({
-    connectionString: process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false,
-    },
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production'
+        ? { rejectUnauthorized: false } // ✅ Required for Railway
+        : false                          // ✅ Local dev — no SSL needed
 });
 
 export const db = drizzle(pool, { schema });
