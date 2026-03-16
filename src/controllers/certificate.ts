@@ -39,7 +39,6 @@ export async function generateCertificate({
         }
 
         const W = 4000;
-        const H = 3091;
 
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
@@ -50,43 +49,44 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ SVG using Liberation Serif — installed via nixpacks.toml
-        const nameSvgBuffer = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${W}" height="300" viewBox="0 0 ${W} 300" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <style>
-      text {
-        font-family: "Liberation Serif", "DejaVu Serif", serif;
-        font-size: 200px;
-        font-weight: bold;
-        fill: #1a1a1a;
-      }
-    </style>
-  </defs>
-  <text x="${W / 2}" y="240" text-anchor="middle" letter-spacing="6">${safeName}</text>
-</svg>`);
+        // ✅ Inline attributes only — librsvg ignores <style> tags
+        // sans-serif is ALWAYS available on any Linux server
+        const nameSvgBuffer = Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="300">` +
+            `<text ` +
+            `x="${W / 2}" ` +
+            `y="240" ` +
+            `text-anchor="middle" ` +
+            `font-family="sans-serif" ` +
+            `font-size="200" ` +
+            `font-weight="bold" ` +
+            `fill="#1a1a1a" ` +
+            `letter-spacing="6"` +
+            `>${safeName}</text>` +
+            `</svg>`
+        );
 
-        const courseSvgBuffer = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${W}" height="160" viewBox="0 0 ${W} 160" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <style>
-      text {
-        font-family: "Liberation Serif", "DejaVu Serif", serif;
-        font-size: 80px;
-        font-weight: bold;
-        fill: #555555;
-      }
-    </style>
-  </defs>
-  <text x="${W / 2}" y="110" text-anchor="middle" letter-spacing="3">${courseTitle}</text>
-</svg>`);
+        const courseSvgBuffer = Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="160">` +
+            `<text ` +
+            `x="${W / 2}" ` +
+            `y="110" ` +
+            `text-anchor="middle" ` +
+            `font-family="sans-serif" ` +
+            `font-size="80" ` +
+            `font-weight="bold" ` +
+            `fill="#555555" ` +
+            `letter-spacing="3"` +
+            `>${courseTitle}</text>` +
+            `</svg>`
+        );
 
         const nameTop   = 1068;
         const courseTop = 1360;
         const qrTop     = 2500;
         const qrLeft    = 120;
 
-        console.log(`[Certificate] Compositing name:"${safeName}" top:${nameTop}`);
+        console.log(`[Certificate] Rendering: "${safeName}" top:${nameTop}`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
