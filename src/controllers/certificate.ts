@@ -78,9 +78,10 @@ export async function generateCertificate({
 
         // Vertical spacing - calibrated to your template
         const nameTop    = 1280; 
-        const courseTop  = 1640; 
+        const courseTop  = 1520; 
         const qrTop      = 2750; 
         const qrLeft     = 120;
+
 
         console.log(`[Certificate] Finalizing image for: ${safeName}`);
 
@@ -228,30 +229,5 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
     } catch (error) {
         console.error('Get all certificates error:', error);
         res.status(500).json({ message: 'Internal server error' });
-    }
-};
-
-export const regenerateCertificate = async (req: AuthRequest, res: Response) => {
-    const userId = req.user?.id;
-    const { courseId } = req.body;
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-    if (!courseId) return res.status(400).json({ message: 'Course ID required' });
-    try {
-        await generateCertificateLogic(userId, courseId);
-        const [newCert] = await db.select({
-            id: certificates.id,
-            certCode: certificates.certCode,
-            issuedAt: certificates.issuedAt,
-            imageUrl: certificates.imageUrl,
-            courseTitle: courses.title,
-        })
-        .from(certificates)
-        .innerJoin(courses, eq(certificates.courseId, courses.id))
-        .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
-        .limit(1);
-        return res.json({ message: 'Certificate regenerated!', certificate: newCert });
-    } catch (error: any) {
-        console.error('[Certificate] Regenerate error:', error);
-        return res.status(500).json({ message: error?.message || 'Regeneration failed' });
     }
 };
