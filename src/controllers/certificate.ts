@@ -13,22 +13,6 @@ import type { AuthRequest } from '../middleware/auth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ Register fonts explicitly for Windows
-if (process.platform === 'win32') {
-    try {
-        const fontsDir = 'C:\\Windows\\Fonts';
-        if (fs.existsSync(path.join(fontsDir, 'arial.ttf'))) {
-            GlobalFonts.registerFromPath(path.join(fontsDir, 'arial.ttf'), 'Arial');
-        }
-        if (fs.existsSync(path.join(fontsDir, 'arialbd.ttf'))) {
-            GlobalFonts.registerFromPath(path.join(fontsDir, 'arialbd.ttf'), 'ArialBold');
-        }
-        console.log('[Certificate] Fonts registered successfully');
-    } catch (err) {
-        console.error('[Certificate] Font registration warning:', err);
-    }
-}
-
 interface CertParams {
     recipientName: string;
     courseTitle: string;
@@ -49,73 +33,68 @@ export async function generateCertificate({
     courseId
 }: CertParams) {
     try {
-        const templatePath = path.join(__dirname, '../../public/templates/certificate.png');
-        const uploadDir = path.join(__dirname, '../../public/uploads/certificates');
+        const templatePath = path.join(process.cwd(), 'public/templates/certificate.png');
+        const uploadDir = path.join(process.cwd(), 'public/uploads/certificates');
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
+
         const W = 4000;
+        const H = 3091;
 
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
             margin: 1,
-            width: 280,
+            width: 320,
             color: { dark: '#000000', light: '#ffffff' }
         });
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // Use registered fonts if on Windows, else fallback to sans-serif
-        const fontName = process.platform === 'win32' ? 'ArialBold' : 'sans-serif';
-        const courseFontName = process.platform === 'win32' ? 'Arial' : 'sans-serif';
+        // ✅ Using SVG instead of Canvas for bulletproof font rendering
+        const nameSvg = Buffer.from(`
+            <svg width="${W}" height="320">
+                <style>
+                    .name { fill: #1a1a1a; font-size: 180px; font-family: sans-serif; font-weight: bold; }
+                </style>
+                <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="name">${safeName}</text>
+            </svg>
+        `);
 
-        // ✅ Draw name using @napi-rs/canvas
-        const drawText = (text: string, fontSize: number, canvasW: number, canvasH: number): Buffer => {
-            const canvas = createCanvas(canvasW, canvasH);
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvasW, canvasH);
-            ctx.fillStyle = '#1a1a1a';
-            ctx.font = `bold ${fontSize}px ${fontName}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(text, canvasW / 2, canvasH / 2);
-            return canvas.toBuffer('image/png');
-        };
+        // MADE SMALLER AS REQUESTED
+        const courseSvg = Buffer.from(`
+            <svg width="${W}" height="200">
+                <style>
+                    .course { fill: #333333; font-size: 65px; font-family: sans-serif; font-weight: bold; }
+                </style>
+                <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="course">${courseTitle.toUpperCase()}</text>
+            </svg>
+        `);
 
-        const drawCourseText = (text: string, fontSize: number, canvasW: number, canvasH: number): Buffer => {
-            const canvas = createCanvas(canvasW, canvasH);
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvasW, canvasH);
-            ctx.fillStyle = '#1a1a1a'; // Switched to darker for better visibility
-            ctx.font = `bold ${fontSize}px ${courseFontName}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(text, canvasW / 2, canvasH / 2);
-            return canvas.toBuffer('image/png');
-        };
-
-        const nameBuffer   = drawText(safeName, 180, W, 280);
-        const courseBuffer = drawCourseText(courseTitle, 85, W, 160);
-
-        const nameTop   = 1068;
-        const courseTop = 1360;
-        const qrTop     = 2500;
+        // Final composite positions (calibrated to template)
+        // Red box location for QR is at the very bottom left
+        const nameTop   = 1300; // Positioned in the middle of the available space
+        const courseTop = 1530; // Nudged up to stop overlap with paragraph
+        const qrTop     = 2750; // Approved bottom-left location
         const qrLeft    = 120;
 
-        console.log(`[Certificate] Rendering name: "${safeName}" with font ${fontName}`);
+
+
+        console.log(`[Certificate] Compositing — Name: "${safeName}", Code: ${certificateNumber}`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
 
         await sharp(templatePath)
             .composite([
-                { input: nameBuffer,   top: nameTop,   left: 0 },
-                { input: courseBuffer, top: courseTop, left: 0 },
+                { input: nameSvg,      top: nameTop,   left: 0 },
+                { input: courseSvg,    top: courseTop, left: 0 },
                 { input: qrBuffer,     top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
+
 
         const imageUrl = `/uploads/certificates/${fileName}`;
         await db.insert(certificates).values({
@@ -125,14 +104,15 @@ export async function generateCertificate({
             imageUrl,
         });
 
-        console.log(`[Certificate] ✅ Done — "${safeName}" → ${imageUrl}`);
+        console.log(`[Certificate] ✅ Created: ${imageUrl}`);
         return { imageUrl, certificateNumber };
 
     } catch (error: any) {
         console.error('[Sharp] Generation Error:', error);
-        throw new Error(`Failed to generate image: ${error.message}`);
+        throw new Error(`Failed to generate: ${error.message}`);
     }
 }
+
 
 export const generateCertificateLogic = async (userId: string, courseId: string) => {
     const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
