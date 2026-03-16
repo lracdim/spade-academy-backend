@@ -142,26 +142,47 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
         .limit(1);
 
+    const oldImageUrl = existing?.imageUrl;
     const certCode = existing?.certCode
         ?? `CERT-${userId.slice(0, 4)}-${courseId.slice(0, 4)}-${Date.now().toString().slice(-6)}`.toUpperCase();
 
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
 
+    try {
+        const result = await generateCertificate({
+            recipientName,
+            courseTitle: course.title,
+            date: new Date().toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            }),
+            verificationUrl,
+            certificateNumber: certCode,
+            userId,
+            courseId,
+        });
 
-    await generateCertificate({
-        recipientName,
-        courseTitle: course.title,
-        date: new Date().toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        }),
-        verificationUrl,
-        certificateNumber: certCode,
-        userId,
-        courseId,
-    });
+        if (oldImageUrl) {
+            const oldFilePath = path.join(process.cwd(), 'public', oldImageUrl.replace(/^\/uploads\//, 'uploads/'));
+            try {
+                if (fs.existsSync(oldFilePath)) {
+                    fs.unlinkSync(oldFilePath);
+                }
+            } catch (cleanupError) {
+                console.warn('[Certificate] Failed to cleanup old file:', cleanupError);
+            }
+        }
+
+        return result;
+    } catch (error: any) {
+        console.error('[Certificate] Generation failed:', error);
+        if (existing) {
+            console.warn('[Certificate] Keeping existing certificate due to generation failure');
+        }
+        throw new Error(`Certificate generation failed: ${error.message}`);
+    }
 };
 
 export const getMyCertificates = async (req: AuthRequest, res: Response) => {
