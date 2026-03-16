@@ -32,73 +32,92 @@ export async function generateCertificate({
     courseId
 }: CertParams) {
     try {
-        // 1. Generate QR Code Buffer
-        const qrBuffer = await QRCode.toBuffer(verificationUrl, {
-            errorCorrectionLevel: 'H',
-            margin: 1,
-            width: 280,
-            color: {
-                dark: '#000000',
-                light: '#ffffff'
-            }
-        });
-
-        // ✅ FIX 1: Sanitize name — fallback if fullName is null/empty
-        const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
-
-        // 2. Name SVG
-        const nameSvgBuffer = Buffer.from(`
-            <svg width="4000" height="280" viewBox="0 0 4000 280" xmlns="http://www.w3.org/2000/svg">
-                <text
-                    x="2000"
-                    y="220"
-                    text-anchor="middle"
-                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
-                    font-size="180"
-                    font-weight="bold"
-                    fill="#1a1a1a"
-                    letter-spacing="8"
-                >${safeName}</text>
-            </svg>
-        `);
-
-        // 3. Course SVG
-        const courseSvgBuffer = Buffer.from(`
-            <svg width="4000" height="140" viewBox="0 0 4000 140" xmlns="http://www.w3.org/2000/svg">
-                <text
-                    x="2000"
-                    y="100"
-                    text-anchor="middle"
-                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
-                    font-size="68"
-                    font-weight="bold"
-                    fill="#444444"
-                    letter-spacing="4"
-                >${courseTitle}</text>
-            </svg>
-        `);
-
-        // 4. Define paths
         const templatePath = path.join(__dirname, '../../public/templates/certificate.png');
         const uploadDir = path.join(__dirname, '../../public/uploads/certificates');
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
+        // ✅ STEP 1: Read actual template dimensions FIRST
+        const templateMeta = await sharp(templatePath).metadata();
+        const W = templateMeta.width!;
+        const H = templateMeta.height!;
+        console.log(`[Certificate] Template dimensions: ${W}x${H}`);
+
+        // ✅ STEP 2: QR Code — sized relative to template
+        const qrSize = Math.round(W * 0.07); // ~7% of width
+        const qrBuffer = await QRCode.toBuffer(verificationUrl, {
+            errorCorrectionLevel: 'H',
+            margin: 1,
+            width: qrSize,
+            color: { dark: '#000000', light: '#ffffff' }
+        });
+
+        const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
+
+        // ✅ STEP 3: Name SVG — MUST match template width exactly
+        // Font size ~6% of template width gives a large readable name
+        const nameFontSize = Math.round(W * 0.06);
+        const nameBoxH = Math.round(H * 0.10);
+        const nameY = Math.round(nameBoxH * 0.75); // baseline ~75% down the box
+
+        const nameSvgBuffer = Buffer.from(
+            `<svg width="${W}" height="${nameBoxH}" viewBox="0 0 ${W} ${nameBoxH}" xmlns="http://www.w3.org/2000/svg">
+                <text
+                    x="${W / 2}"
+                    y="${nameY}"
+                    text-anchor="middle"
+                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
+                    font-size="${nameFontSize}"
+                    font-weight="bold"
+                    fill="#1a1a1a"
+                    letter-spacing="6"
+                >${safeName}</text>
+            </svg>`
+        );
+
+        // ✅ STEP 4: Course title SVG — MUST match template width exactly
+        const courseFontSize = Math.round(W * 0.022);
+        const courseBoxH = Math.round(H * 0.06);
+        const courseY = Math.round(courseBoxH * 0.72);
+
+        const courseSvgBuffer = Buffer.from(
+            `<svg width="${W}" height="${courseBoxH}" viewBox="0 0 ${W} ${courseBoxH}" xmlns="http://www.w3.org/2000/svg">
+                <text
+                    x="${W / 2}"
+                    y="${courseY}"
+                    text-anchor="middle"
+                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
+                    font-size="${courseFontSize}"
+                    font-weight="bold"
+                    fill="#555555"
+                    letter-spacing="3"
+                >${courseTitle}</text>
+            </svg>`
+        );
+
+        // ✅ STEP 5: Calculate composite positions as % of template size
+        // These match where the name/course/QR areas are on your certificate template
+        const nameTop   = Math.round(H * 0.455);  // ~45.5% down — where the name line is
+        const courseTop = Math.round(H * 0.555);  // ~55.5% down — below name
+        const qrTop     = Math.round(H * 0.800);  // ~80% down — bottom left
+        const qrLeft    = Math.round(W * 0.038);  // ~3.8% from left
+
+        console.log(`[Certificate] Positions — name:${nameTop}, course:${courseTop}, qr:(${qrLeft},${qrTop})`);
+        console.log(`[Certificate] Font sizes — name:${nameFontSize}px, course:${courseFontSize}px`);
+
         const fileName = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
 
-        // 5. Sharp Composition
         await sharp(templatePath)
             .composite([
-                { input: nameSvgBuffer,   top: 1250, left: 0, blend: 'over' },
-                { input: courseSvgBuffer, top: 1490, left: 0, blend: 'over' },
-                { input: qrBuffer,        top: 2680, left: 120 },
+                { input: nameSvgBuffer,   top: nameTop,   left: 0 },
+                { input: courseSvgBuffer, top: courseTop, left: 0 },
+                { input: qrBuffer,        top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
 
-        // 6. Save to database
         const imageUrl = `/uploads/certificates/${fileName}`;
         await db.insert(certificates).values({
             userId,
@@ -107,7 +126,7 @@ export async function generateCertificate({
             imageUrl,
         });
 
-        console.log(`[Certificate] Generated for "${safeName}" → ${imageUrl}`);
+        console.log(`[Certificate] ✅ Done — "${safeName}" → ${imageUrl}`);
         return { imageUrl, certificateNumber };
 
     } catch (error: any) {
@@ -122,13 +141,13 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
 
     if (!user || !course) throw new Error('User or course not found');
 
-    // ✅ FIX 1: Robust name fallback — handles null fullName
+    // ✅ Robust name fallback — handles null fullName
     const recipientName =
         user.fullName?.trim() ||
-        user.email?.split('@')[0]?.replace(/[._]/g, ' ') ||
+        user.email?.split('@')[0]?.replace(/[._-]/g, ' ') ||
         'Security Professional';
 
-    console.log(`[Certificate] Recipient name resolved: "${recipientName}" (raw fullName: "${user.fullName}")`);
+    console.log(`[Certificate] Name resolved: "${recipientName}" (raw: "${user.fullName}")`);
 
     const [existing] = await db
         .select()
@@ -152,12 +171,10 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         await db.delete(certificates).where(eq(certificates.id, existing.id));
     }
 
-    // ✅ FIX 2: QR code must point to the FRONTEND verify page, not the backend API
-    // When scanned, the user should land on the React verification page
+    // ✅ QR points to FRONTEND verify page
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
-
-    console.log(`[Certificate] QR verification URL: ${verificationUrl}`);
+    console.log(`[Certificate] QR URL: ${verificationUrl}`);
 
     await generateCertificate({
         recipientName,
@@ -200,11 +217,9 @@ export const getMyCertificates = async (req: AuthRequest, res: Response) => {
 
 export const verifyCertificate = async (req: AuthRequest, res: Response) => {
     const { code } = req.params;
-
     if (!code || typeof code !== 'string') {
         return res.status(400).json({ message: 'Invalid certificate code' });
     }
-
     try {
         const [cert] = await db
             .select({
@@ -220,7 +235,6 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
             .limit(1);
 
         if (!cert) return res.status(404).json({ message: 'Certificate not found' });
-
         res.json(cert);
     } catch (error) {
         console.error('Verify certificate error:', error);
