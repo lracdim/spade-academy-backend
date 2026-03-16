@@ -22,7 +22,15 @@ interface CertParams {
     courseId: string;
 }
 
-export async function generateCertificate({ recipientName, courseTitle, date, verificationUrl, certificateNumber, userId, courseId }: CertParams) {
+export async function generateCertificate({
+    recipientName,
+    courseTitle,
+    date,
+    verificationUrl,
+    certificateNumber,
+    userId,
+    courseId
+}: CertParams) {
     try {
         // 1. Generate QR Code Buffer
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
@@ -35,8 +43,10 @@ export async function generateCertificate({ recipientName, courseTitle, date, ve
             }
         });
 
-        // 2. Name SVG — uses DejaVu Serif (available on Linux/Railway)
-        const upperName = recipientName.toUpperCase();
+        // ✅ FIX 1: Sanitize name — fallback if fullName is null/empty
+        const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
+
+        // 2. Name SVG
         const nameSvgBuffer = Buffer.from(`
             <svg width="4000" height="280" viewBox="0 0 4000 280" xmlns="http://www.w3.org/2000/svg">
                 <text
@@ -48,7 +58,7 @@ export async function generateCertificate({ recipientName, courseTitle, date, ve
                     font-weight="bold"
                     fill="#1a1a1a"
                     letter-spacing="8"
-                >${upperName}</text>
+                >${safeName}</text>
             </svg>
         `);
 
@@ -81,8 +91,8 @@ export async function generateCertificate({ recipientName, courseTitle, date, ve
         // 5. Sharp Composition
         await sharp(templatePath)
             .composite([
-                { input: nameSvgBuffer,   top: 1250, left: 0,   blend: 'over' },
-                { input: courseSvgBuffer, top: 1490, left: 0,   blend: 'over' },
+                { input: nameSvgBuffer,   top: 1250, left: 0, blend: 'over' },
+                { input: courseSvgBuffer, top: 1490, left: 0, blend: 'over' },
                 { input: qrBuffer,        top: 2680, left: 120 },
             ])
             .png({ quality: 100 })
@@ -97,7 +107,9 @@ export async function generateCertificate({ recipientName, courseTitle, date, ve
             imageUrl,
         });
 
+        console.log(`[Certificate] Generated for "${safeName}" → ${imageUrl}`);
         return { imageUrl, certificateNumber };
+
     } catch (error: any) {
         console.error('[Sharp] Generation Error:', error);
         throw new Error(`Failed to generate image: ${error.message}`);
@@ -109,6 +121,14 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
     const [course] = await db.select().from(courses).where(eq(courses.id, courseId)).limit(1);
 
     if (!user || !course) throw new Error('User or course not found');
+
+    // ✅ FIX 1: Robust name fallback — handles null fullName
+    const recipientName =
+        user.fullName?.trim() ||
+        user.email?.split('@')[0]?.replace(/[._]/g, ' ') ||
+        'Security Professional';
+
+    console.log(`[Certificate] Recipient name resolved: "${recipientName}" (raw fullName: "${user.fullName}")`);
 
     const [existing] = await db
         .select()
@@ -132,17 +152,20 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         await db.delete(certificates).where(eq(certificates.id, existing.id));
     }
 
-    // ✅ Fixed URL — points to correct API route
-    const appUrl = process.env.APP_URL || 'http://localhost:5000';
-    const verificationUrl = `${appUrl}/api/certificates/verify/${certCode}`;
+    // ✅ FIX 2: QR code must point to the FRONTEND verify page, not the backend API
+    // When scanned, the user should land on the React verification page
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
+
+    console.log(`[Certificate] QR verification URL: ${verificationUrl}`);
 
     await generateCertificate({
-        recipientName: user.fullName,
+        recipientName,
         courseTitle: course.title,
-        date: new Date().toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
+        date: new Date().toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
         }),
         verificationUrl,
         certificateNumber: certCode,
@@ -197,6 +220,7 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
             .limit(1);
 
         if (!cert) return res.status(404).json({ message: 'Certificate not found' });
+
         res.json(cert);
     } catch (error) {
         console.error('Verify certificate error:', error);

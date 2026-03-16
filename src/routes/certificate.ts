@@ -6,6 +6,6 @@ const router = Router();
 
 router.get('/my', authMiddleware, roleMiddleware(['GUARD']), getMyCertificates);
 router.get('/all', authMiddleware, roleMiddleware(['ADMIN']), getAllCertificates);
-router.get('/verify/:code', verifyCertificate); // Public endpoint
+router.get('/verify/:code', verifyCertificate); // ✅ Public — no auth needed
 
 export default router;
