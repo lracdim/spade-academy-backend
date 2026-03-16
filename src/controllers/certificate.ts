@@ -38,69 +38,66 @@ export async function generateCertificate({
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
-        // Template is 4000x3091
         const W = 4000;
-        const H = 3091;
 
-        const qrSize = 280;
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
             margin: 1,
-            width: qrSize,
+            width: 280,
             color: { dark: '#000000', light: '#ffffff' }
         });
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Name SVG — 4000px wide, name at 42% down = 1298px
-        const nameSvgBuffer = Buffer.from(
-            `<svg width="4000" height="300" viewBox="0 0 4000 300" xmlns="http://www.w3.org/2000/svg">
-                <text
-                    x="2000"
-                    y="230"
-                    text-anchor="middle"
-                    font-family="DejaVu Serif, Liberation Serif, Georgia, serif"
-                    font-size="200"
-                    font-weight="bold"
-                    fill="#1a1a1a"
-                    letter-spacing="6"
-                >${safeName}</text>
-            </svg>`
-        );
+        // ✅ Sharp built-in text rendering — no system fonts needed
+        const nameOverlay = await sharp({
+            text: {
+                text: safeName,
+                font: 'serif',
+                fontSize: 130,
+                rgba: true,
+                width: W - 400,
+                align: 'centre',
+                wrap: 'none',
+                dpi: 300,
+            }
+        }).png().toBuffer();
 
-        // ✅ Course SVG — 4000px wide
-        const courseSvgBuffer = Buffer.from(
-            `<svg width="4000" height="160" viewBox="0 0 4000 160" xmlns="http://www.w3.org/2000/svg">
-                <text
-                    x="2000"
-                    y="110"
-                    text-anchor="middle"
-                    font-family="DejaVu Serif, Liberation Serif, Georgia, serif"
-                    font-size="80"
-                    font-weight="bold"
-                    fill="#555555"
-                    letter-spacing="3"
-                >${courseTitle}</text>
-            </svg>`
-        );
+        const courseOverlay = await sharp({
+            text: {
+                text: courseTitle,
+                font: 'serif',
+                fontSize: 60,
+                rgba: true,
+                width: W - 400,
+                align: 'centre',
+                wrap: 'none',
+                dpi: 300,
+            }
+        }).png().toBuffer();
 
-        // ✅ Exact pixel positions for 4000x3091 template
-        // Name: 42% down = 1298px, minus SVG height offset
-        const nameTop   = 1068;   // text baseline lands at ~1298px (42% of 3091)
-        const courseTop = 1360;   // course title just below name
-        const qrTop     = 2500;   // bottom left area
+        // Center horizontally
+        const nameMeta   = await sharp(nameOverlay).metadata();
+        const courseMeta = await sharp(courseOverlay).metadata();
+
+        const nameLeft   = Math.round((W - (nameMeta.width   || 0)) / 2);
+        const courseLeft = Math.round((W - (courseMeta.width || 0)) / 2);
+
+        const nameTop   = 1100;
+        const courseTop = 1380;
+        const qrTop     = 2500;
         const qrLeft    = 120;
 
-        console.log(`[Certificate] Compositing: name@${nameTop}, course@${courseTop}, qr@(${qrLeft},${qrTop})`);
+        console.log(`[Certificate] Name: "${safeName}" w=${nameMeta.width} left=${nameLeft} top=${nameTop}`);
 
-        const fileName = `${certificateNumber}.png`;
+        const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
 
         await sharp(templatePath)
             .composite([
-                { input: nameSvgBuffer,   top: nameTop,   left: 0 },
-                { input: courseSvgBuffer, top: courseTop, left: 0 },
-                { input: qrBuffer,        top: qrTop,     left: qrLeft },
+                { input: nameOverlay,   top: nameTop,   left: nameLeft },
+                { input: courseOverlay, top: courseTop, left: courseLeft },
+                { input: qrBuffer,      top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
@@ -158,6 +155,7 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
+    console.log(`[Certificate] QR URL: ${verificationUrl}`);
 
     await generateCertificate({
         recipientName,
