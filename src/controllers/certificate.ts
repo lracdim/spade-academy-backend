@@ -2,7 +2,6 @@ import sharp from 'sharp';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
-import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
 import { db } from '../db/index.js';
 import { certificates, users, courses } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -35,13 +34,12 @@ export async function generateCertificate({
     try {
         const templatePath = path.join(process.cwd(), 'public/templates/certificate.png');
         const uploadDir = path.join(process.cwd(), 'public/uploads/certificates');
+        
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
-
         const W = 4000;
-        const H = 3091;
 
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
@@ -52,36 +50,45 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Using SVG instead of Canvas for bulletproof font rendering
+        // ✅ Pure SVG with Namespace and Absolute Coordinates for 100% compatibility (Windows/Linux/Railway)
         const nameSvg = Buffer.from(`
-            <svg width="${W}" height="320">
-                <style>
-                    .name { fill: #1a1a1a; font-size: 180px; font-family: sans-serif; font-weight: bold; }
-                </style>
-                <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="name">${safeName}</text>
+            <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="400">
+                <text 
+                    x="2000" 
+                    y="200" 
+                    text-anchor="middle" 
+                    dominant-baseline="middle" 
+                    fill="#1a1a1a" 
+                    font-size="200" 
+                    font-family="Arial, sans-serif" 
+                    font-weight="bold"
+                >${safeName}</text>
             </svg>
         `);
 
-        // MADE SMALLER AS REQUESTED
+        // Course title - perfectly spaced
         const courseSvg = Buffer.from(`
-            <svg width="${W}" height="200">
-                <style>
-                    .course { fill: #333333; font-size: 65px; font-family: sans-serif; font-weight: bold; }
-                </style>
-                <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="course">${courseTitle.toUpperCase()}</text>
+            <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="200">
+                <text 
+                    x="2000" 
+                    y="100" 
+                    text-anchor="middle" 
+                    dominant-baseline="middle" 
+                    fill="#333333" 
+                    font-size="65" 
+                    font-family="Arial, sans-serif" 
+                    font-weight="bold"
+                >${courseTitle.toUpperCase()}</text>
             </svg>
         `);
 
-        // Final composite positions (calibrated to template)
-        // Red box location for QR is at the very bottom left
-        const nameTop   = 1300; // Positioned in the middle of the available space
-        const courseTop = 1530; // Nudged up to stop overlap with paragraph
-        const qrTop     = 2750; // Approved bottom-left location
+        // Calibration positions
+        const nameTop   = 1280; 
+        const courseTop = 1530; 
+        const qrTop     = 2750; 
         const qrLeft    = 120;
 
-
-
-        console.log(`[Certificate] Compositing — Name: "${safeName}", Code: ${certificateNumber}`);
+        console.log(`[Certificate] Finalizing image for: ${safeName}`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
@@ -95,16 +102,18 @@ export async function generateCertificate({
             .png({ quality: 100 })
             .toFile(outputPath);
 
-
         const imageUrl = `/uploads/certificates/${fileName}`;
         await db.insert(certificates).values({
             userId,
             courseId,
             certCode: certificateNumber,
             imageUrl,
+        }).onConflictDoUpdate({
+            target: [certificates.userId, certificates.courseId],
+            set: { imageUrl, issuedAt: new Date() }
         });
 
-        console.log(`[Certificate] ✅ Created: ${imageUrl}`);
+        console.log(`[Certificate] ✅ Success: ${imageUrl}`);
         return { imageUrl, certificateNumber };
 
     } catch (error: any) {
@@ -112,7 +121,6 @@ export async function generateCertificate({
         throw new Error(`Failed to generate: ${error.message}`);
     }
 }
-
 
 export const generateCertificateLogic = async (userId: string, courseId: string) => {
     const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
@@ -125,9 +133,6 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         user.email?.split('@')[0]?.replace(/[._-]/g, ' ') ||
         'Security Professional';
 
-    console.log(`[Certificate] Name resolved: "${recipientName}" (id: ${userId}, raw_full_name: "${user.fullName}")`);
-
-
     const [existing] = await db
         .select()
         .from(certificates)
@@ -137,21 +142,9 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
     const certCode = existing?.certCode
         ?? `CERT-${userId.slice(0, 4)}-${courseId.slice(0, 4)}-${Date.now().toString().slice(-6)}`.toUpperCase();
 
-    if (existing) {
-        if (existing.imageUrl) {
-            const oldFilePath = path.join(process.cwd(), 'public', existing.imageUrl);
-            if (fs.existsSync(oldFilePath)) {
-                try { fs.unlinkSync(oldFilePath); } catch (err) {
-                    console.error('[Certificate] Failed to delete old file:', err);
-                }
-            }
-        }
-        await db.delete(certificates).where(eq(certificates.id, existing.id));
-    }
-
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
-    console.log(`[Certificate] QR URL: ${verificationUrl}`);
+
 
     await generateCertificate({
         recipientName,
@@ -242,19 +235,6 @@ export const regenerateCertificate = async (req: AuthRequest, res: Response) => 
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     if (!courseId) return res.status(400).json({ message: 'Course ID required' });
     try {
-        const [existing] = await db.select()
-            .from(certificates)
-            .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
-            .limit(1);
-        if (existing?.imageUrl) {
-            const oldPath = path.join(process.cwd(), 'public', existing.imageUrl);
-            if (fs.existsSync(oldPath)) {
-                try { fs.unlinkSync(oldPath); } catch (e) {
-                    console.warn('[Certificate] Could not delete old file:', e);
-                }
-            }
-            await db.delete(certificates).where(eq(certificates.id, existing.id));
-        }
         await generateCertificateLogic(userId, courseId);
         const [newCert] = await db.select({
             id: certificates.id,
