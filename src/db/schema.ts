@@ -67,7 +67,10 @@ export const certificates = pgTable('certificates', {
     issuedAt: timestamp('issued_at').defaultNow().notNull(),
     certCode: text('cert_code').notNull().unique(),
     imageUrl: text('image_url'),
-});
+}, (table) => ({
+    unq: unique().on(table.userId, table.courseId),
+}));
+
 
 export const userModuleProgress = pgTable('user_module_progress', {
     id: uuid('id').primaryKey().defaultRandom(),

@@ -50,40 +50,31 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Pure SVG with Namespace and Absolute Coordinates for 100% compatibility (Windows/Linux/Railway)
-        const nameSvg = Buffer.from(`
-            <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="400">
-                <text 
-                    x="2000" 
-                    y="200" 
-                    text-anchor="middle" 
-                    dominant-baseline="middle" 
-                    fill="#1a1a1a" 
-                    font-size="200" 
-                    font-family="Arial, sans-serif" 
-                    font-weight="bold"
-                >${safeName}</text>
-            </svg>
-        `);
+        // ✅ Using Sharp's native text rendering for maximum reliability
+        const nameBuffer = await sharp({
+            text: {
+                text: `<span foreground="#1a1a1a"><b>${safeName}</b></span>`,
+                font: 'sans-serif',
+                rgba: true,
+                width: W,
+                align: 'center',
+                justify: true,
+            }
+        }).png().toBuffer();
 
-        // Course title - perfectly spaced
-        const courseSvg = Buffer.from(`
-            <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="200">
-                <text 
-                    x="2000" 
-                    y="100" 
-                    text-anchor="middle" 
-                    dominant-baseline="middle" 
-                    fill="#333333" 
-                    font-size="65" 
-                    font-family="Arial, sans-serif" 
-                    font-weight="bold"
-                >${courseTitle.toUpperCase()}</text>
-            </svg>
-        `);
+        const courseBuffer = await sharp({
+            text: {
+                text: `<span foreground="#333333"><b>${courseTitle.toUpperCase()}</b></span>`,
+                font: 'sans-serif',
+                rgba: true,
+                width: W,
+                align: 'center',
+                justify: true,
+            }
+        }).png().toBuffer();
 
-        // Calibration positions
-        const nameTop   = 1280; 
+        // Calibration positions (tuned for Sharp's text engine)
+        const nameTop   = 1300; 
         const courseTop = 1530; 
         const qrTop     = 2750; 
         const qrLeft    = 120;
@@ -95,8 +86,8 @@ export async function generateCertificate({
 
         await sharp(templatePath)
             .composite([
-                { input: nameSvg,      top: nameTop,   left: 0 },
-                { input: courseSvg,    top: courseTop, left: 0 },
+                { input: nameBuffer,   top: nameTop,   left: 0 },
+                { input: courseBuffer, top: courseTop, left: 0 },
                 { input: qrBuffer,     top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
@@ -110,8 +101,13 @@ export async function generateCertificate({
             imageUrl,
         }).onConflictDoUpdate({
             target: [certificates.userId, certificates.courseId],
-            set: { imageUrl, issuedAt: new Date() }
+            set: { 
+                imageUrl, 
+                certCode: certificateNumber, 
+                issuedAt: new Date() 
+            }
         });
+
 
         console.log(`[Certificate] ✅ Success: ${imageUrl}`);
         return { imageUrl, certificateNumber };
