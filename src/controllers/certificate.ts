@@ -38,14 +38,11 @@ export async function generateCertificate({
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
-        // ✅ Read actual template dimensions FIRST
-        const templateMeta = await sharp(templatePath).metadata();
-        const W = templateMeta.width!;
-        const H = templateMeta.height!;
-        console.log(`[Certificate] Template dimensions: ${W}x${H}`);
+        // Template is 4000x3091
+        const W = 4000;
+        const H = 3091;
 
-        // ✅ QR Code sized relative to template
-        const qrSize = Math.round(W * 0.07);
+        const qrSize = 280;
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
             margin: 1,
@@ -55,19 +52,15 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Name SVG — matches template width exactly
-        const nameFontSize = Math.round(W * 0.06);
-        const nameBoxH = Math.round(H * 0.10);
-        const nameY = Math.round(nameBoxH * 0.75);
-
+        // ✅ Name SVG — 4000px wide, name at 42% down = 1298px
         const nameSvgBuffer = Buffer.from(
-            `<svg width="${W}" height="${nameBoxH}" viewBox="0 0 ${W} ${nameBoxH}" xmlns="http://www.w3.org/2000/svg">
+            `<svg width="4000" height="300" viewBox="0 0 4000 300" xmlns="http://www.w3.org/2000/svg">
                 <text
-                    x="${W / 2}"
-                    y="${nameY}"
+                    x="2000"
+                    y="230"
                     text-anchor="middle"
-                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
-                    font-size="${nameFontSize}"
+                    font-family="DejaVu Serif, Liberation Serif, Georgia, serif"
+                    font-size="200"
                     font-weight="bold"
                     fill="#1a1a1a"
                     letter-spacing="6"
@@ -75,19 +68,15 @@ export async function generateCertificate({
             </svg>`
         );
 
-        // ✅ Course title SVG — matches template width exactly
-        const courseFontSize = Math.round(W * 0.022);
-        const courseBoxH = Math.round(H * 0.06);
-        const courseY = Math.round(courseBoxH * 0.72);
-
+        // ✅ Course SVG — 4000px wide
         const courseSvgBuffer = Buffer.from(
-            `<svg width="${W}" height="${courseBoxH}" viewBox="0 0 ${W} ${courseBoxH}" xmlns="http://www.w3.org/2000/svg">
+            `<svg width="4000" height="160" viewBox="0 0 4000 160" xmlns="http://www.w3.org/2000/svg">
                 <text
-                    x="${W / 2}"
-                    y="${courseY}"
+                    x="2000"
+                    y="110"
                     text-anchor="middle"
-                    font-family="DejaVu Serif, Georgia, Times New Roman, serif"
-                    font-size="${courseFontSize}"
+                    font-family="DejaVu Serif, Liberation Serif, Georgia, serif"
+                    font-size="80"
                     font-weight="bold"
                     fill="#555555"
                     letter-spacing="3"
@@ -95,14 +84,14 @@ export async function generateCertificate({
             </svg>`
         );
 
-        // ✅ Positions as % of template size
-        const nameTop  = Math.round(H * 0.455);
-        const courseTop = Math.round(H * 0.555);
-        const qrTop    = Math.round(H * 0.800);
-        const qrLeft   = Math.round(W * 0.038);
+        // ✅ Exact pixel positions for 4000x3091 template
+        // Name: 42% down = 1298px, minus SVG height offset
+        const nameTop   = 1068;   // text baseline lands at ~1298px (42% of 3091)
+        const courseTop = 1360;   // course title just below name
+        const qrTop     = 2500;   // bottom left area
+        const qrLeft    = 120;
 
-        console.log(`[Certificate] Positions — name:${nameTop}, course:${courseTop}, qr:(${qrLeft},${qrTop})`);
-        console.log(`[Certificate] Font sizes — name:${nameFontSize}px, course:${courseFontSize}px`);
+        console.log(`[Certificate] Compositing: name@${nameTop}, course@${courseTop}, qr@(${qrLeft},${qrTop})`);
 
         const fileName = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
@@ -156,7 +145,6 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         ?? `CERT-${userId.slice(0, 4)}-${courseId.slice(0, 4)}-${Date.now().toString().slice(-6)}`.toUpperCase();
 
     if (existing) {
-        console.log(`[Certificate] Deleting old cert before regenerating`);
         if (existing.imageUrl) {
             const oldFilePath = path.join(process.cwd(), 'public', existing.imageUrl);
             if (fs.existsSync(oldFilePath)) {
@@ -170,7 +158,6 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
 
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
-    console.log(`[Certificate] QR URL: ${verificationUrl}`);
 
     await generateCertificate({
         recipientName,
@@ -187,13 +174,9 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
     });
 };
 
-// ─────────────────────────────────────────────
-// GET /api/certificates/my
-// ─────────────────────────────────────────────
 export const getMyCertificates = async (req: AuthRequest, res: Response) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-
     try {
         const userCerts = await db
             .select({
@@ -206,7 +189,6 @@ export const getMyCertificates = async (req: AuthRequest, res: Response) => {
             .from(certificates)
             .innerJoin(courses, eq(certificates.courseId, courses.id))
             .where(eq(certificates.userId, userId));
-
         res.json(userCerts);
     } catch (error) {
         console.error('Get certificates error:', error);
@@ -214,9 +196,6 @@ export const getMyCertificates = async (req: AuthRequest, res: Response) => {
     }
 };
 
-// ─────────────────────────────────────────────
-// GET /api/certificates/verify/:code (PUBLIC)
-// ─────────────────────────────────────────────
 export const verifyCertificate = async (req: AuthRequest, res: Response) => {
     const { code } = req.params;
     if (!code || typeof code !== 'string') {
@@ -235,7 +214,6 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
             .innerJoin(courses, eq(certificates.courseId, courses.id))
             .where(eq(certificates.certCode, code))
             .limit(1);
-
         if (!cert) return res.status(404).json({ message: 'Certificate not found' });
         res.json(cert);
     } catch (error) {
@@ -244,9 +222,6 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
     }
 };
 
-// ─────────────────────────────────────────────
-// GET /api/certificates/all (ADMIN)
-// ─────────────────────────────────────────────
 export const getAllCertificates = async (req: AuthRequest, res: Response) => {
     try {
         const certs = await db
@@ -260,7 +235,6 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
             .from(certificates)
             .innerJoin(users, eq(certificates.userId, users.id))
             .innerJoin(courses, eq(certificates.courseId, courses.id));
-
         res.json(certs);
     } catch (error) {
         console.error('Get all certificates error:', error);
@@ -268,25 +242,16 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
     }
 };
 
-// ─────────────────────────────────────────────
-// POST /api/certificates/regenerate (GUARD)
-// ─────────────────────────────────────────────
 export const regenerateCertificate = async (req: AuthRequest, res: Response) => {
     const userId = req.user?.id;
     const { courseId } = req.body;
-
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     if (!courseId) return res.status(400).json({ message: 'Course ID required' });
-
     try {
-        console.log(`[Certificate] Regenerate requested by ${userId} for course ${courseId}`);
-
-        // 1. Delete existing file + DB record
         const [existing] = await db.select()
             .from(certificates)
             .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
             .limit(1);
-
         if (existing?.imageUrl) {
             const oldPath = path.join(process.cwd(), 'public', existing.imageUrl);
             if (fs.existsSync(oldPath)) {
@@ -295,13 +260,8 @@ export const regenerateCertificate = async (req: AuthRequest, res: Response) => 
                 }
             }
             await db.delete(certificates).where(eq(certificates.id, existing.id));
-            console.log(`[Certificate] Deleted old cert: ${existing.certCode}`);
         }
-
-        // 2. Generate fresh
         await generateCertificateLogic(userId, courseId);
-
-        // 3. Return new cert
         const [newCert] = await db.select({
             id: certificates.id,
             certCode: certificates.certCode,
@@ -313,10 +273,7 @@ export const regenerateCertificate = async (req: AuthRequest, res: Response) => 
         .innerJoin(courses, eq(certificates.courseId, courses.id))
         .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
         .limit(1);
-
-        console.log(`[Certificate] ✅ Regenerated successfully`);
         return res.json({ message: 'Certificate regenerated!', certificate: newCert });
-
     } catch (error: any) {
         console.error('[Certificate] Regenerate error:', error);
         return res.status(500).json({ message: error?.message || 'Regeneration failed' });
