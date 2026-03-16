@@ -38,14 +38,14 @@ export async function generateCertificate({
             fs.mkdirSync(uploadDir, { recursive: true });
         }
 
-        // ✅ STEP 1: Read actual template dimensions FIRST
+        // ✅ Read actual template dimensions FIRST
         const templateMeta = await sharp(templatePath).metadata();
         const W = templateMeta.width!;
         const H = templateMeta.height!;
         console.log(`[Certificate] Template dimensions: ${W}x${H}`);
 
-        // ✅ STEP 2: QR Code — sized relative to template
-        const qrSize = Math.round(W * 0.07); // ~7% of width
+        // ✅ QR Code sized relative to template
+        const qrSize = Math.round(W * 0.07);
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
             margin: 1,
@@ -55,11 +55,10 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ STEP 3: Name SVG — MUST match template width exactly
-        // Font size ~6% of template width gives a large readable name
+        // ✅ Name SVG — matches template width exactly
         const nameFontSize = Math.round(W * 0.06);
         const nameBoxH = Math.round(H * 0.10);
-        const nameY = Math.round(nameBoxH * 0.75); // baseline ~75% down the box
+        const nameY = Math.round(nameBoxH * 0.75);
 
         const nameSvgBuffer = Buffer.from(
             `<svg width="${W}" height="${nameBoxH}" viewBox="0 0 ${W} ${nameBoxH}" xmlns="http://www.w3.org/2000/svg">
@@ -76,7 +75,7 @@ export async function generateCertificate({
             </svg>`
         );
 
-        // ✅ STEP 4: Course title SVG — MUST match template width exactly
+        // ✅ Course title SVG — matches template width exactly
         const courseFontSize = Math.round(W * 0.022);
         const courseBoxH = Math.round(H * 0.06);
         const courseY = Math.round(courseBoxH * 0.72);
@@ -96,12 +95,11 @@ export async function generateCertificate({
             </svg>`
         );
 
-        // ✅ STEP 5: Calculate composite positions as % of template size
-        // These match where the name/course/QR areas are on your certificate template
-        const nameTop   = Math.round(H * 0.455);  // ~45.5% down — where the name line is
-        const courseTop = Math.round(H * 0.555);  // ~55.5% down — below name
-        const qrTop     = Math.round(H * 0.800);  // ~80% down — bottom left
-        const qrLeft    = Math.round(W * 0.038);  // ~3.8% from left
+        // ✅ Positions as % of template size
+        const nameTop  = Math.round(H * 0.455);
+        const courseTop = Math.round(H * 0.555);
+        const qrTop    = Math.round(H * 0.800);
+        const qrLeft   = Math.round(W * 0.038);
 
         console.log(`[Certificate] Positions — name:${nameTop}, course:${courseTop}, qr:(${qrLeft},${qrTop})`);
         console.log(`[Certificate] Font sizes — name:${nameFontSize}px, course:${courseFontSize}px`);
@@ -141,7 +139,6 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
 
     if (!user || !course) throw new Error('User or course not found');
 
-    // ✅ Robust name fallback — handles null fullName
     const recipientName =
         user.fullName?.trim() ||
         user.email?.split('@')[0]?.replace(/[._-]/g, ' ') ||
@@ -159,7 +156,7 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         ?? `CERT-${userId.slice(0, 4)}-${courseId.slice(0, 4)}-${Date.now().toString().slice(-6)}`.toUpperCase();
 
     if (existing) {
-        console.log(`[Certificate] Regenerating for user ${userId}`);
+        console.log(`[Certificate] Deleting old cert before regenerating`);
         if (existing.imageUrl) {
             const oldFilePath = path.join(process.cwd(), 'public', existing.imageUrl);
             if (fs.existsSync(oldFilePath)) {
@@ -171,7 +168,6 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         await db.delete(certificates).where(eq(certificates.id, existing.id));
     }
 
-    // ✅ QR points to FRONTEND verify page
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
     console.log(`[Certificate] QR URL: ${verificationUrl}`);
@@ -191,6 +187,9 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
     });
 };
 
+// ─────────────────────────────────────────────
+// GET /api/certificates/my
+// ─────────────────────────────────────────────
 export const getMyCertificates = async (req: AuthRequest, res: Response) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -215,6 +214,9 @@ export const getMyCertificates = async (req: AuthRequest, res: Response) => {
     }
 };
 
+// ─────────────────────────────────────────────
+// GET /api/certificates/verify/:code (PUBLIC)
+// ─────────────────────────────────────────────
 export const verifyCertificate = async (req: AuthRequest, res: Response) => {
     const { code } = req.params;
     if (!code || typeof code !== 'string') {
@@ -242,6 +244,9 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
     }
 };
 
+// ─────────────────────────────────────────────
+// GET /api/certificates/all (ADMIN)
+// ─────────────────────────────────────────────
 export const getAllCertificates = async (req: AuthRequest, res: Response) => {
     try {
         const certs = await db
@@ -260,5 +265,60 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
     } catch (error) {
         console.error('Get all certificates error:', error);
         res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+// ─────────────────────────────────────────────
+// POST /api/certificates/regenerate (GUARD)
+// ─────────────────────────────────────────────
+export const regenerateCertificate = async (req: AuthRequest, res: Response) => {
+    const userId = req.user?.id;
+    const { courseId } = req.body;
+
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!courseId) return res.status(400).json({ message: 'Course ID required' });
+
+    try {
+        console.log(`[Certificate] Regenerate requested by ${userId} for course ${courseId}`);
+
+        // 1. Delete existing file + DB record
+        const [existing] = await db.select()
+            .from(certificates)
+            .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
+            .limit(1);
+
+        if (existing?.imageUrl) {
+            const oldPath = path.join(process.cwd(), 'public', existing.imageUrl);
+            if (fs.existsSync(oldPath)) {
+                try { fs.unlinkSync(oldPath); } catch (e) {
+                    console.warn('[Certificate] Could not delete old file:', e);
+                }
+            }
+            await db.delete(certificates).where(eq(certificates.id, existing.id));
+            console.log(`[Certificate] Deleted old cert: ${existing.certCode}`);
+        }
+
+        // 2. Generate fresh
+        await generateCertificateLogic(userId, courseId);
+
+        // 3. Return new cert
+        const [newCert] = await db.select({
+            id: certificates.id,
+            certCode: certificates.certCode,
+            issuedAt: certificates.issuedAt,
+            imageUrl: certificates.imageUrl,
+            courseTitle: courses.title,
+        })
+        .from(certificates)
+        .innerJoin(courses, eq(certificates.courseId, courses.id))
+        .where(and(eq(certificates.userId, userId), eq(certificates.courseId, courseId)))
+        .limit(1);
+
+        console.log(`[Certificate] ✅ Regenerated successfully`);
+        return res.json({ message: 'Certificate regenerated!', certificate: newCert });
+
+    } catch (error: any) {
+        console.error('[Certificate] Regenerate error:', error);
+        return res.status(500).json({ message: error?.message || 'Regeneration failed' });
     }
 };
