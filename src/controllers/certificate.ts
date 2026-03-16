@@ -50,40 +50,42 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Using Sharp's native text rendering for maximum reliability
+        // ✅ Step 1: Create a name buffer that is the FULL WIDTH of the cert (4000px)
+        // This makes centering "automatic" when we set left: 0
         const nameBuffer = await sharp({
             text: {
                 text: `<span foreground="#1a1a1a"><b>${safeName}</b></span>`,
-                font: 'sans-serif',
+                font: 'Arial, DejaVu Sans, Liberation Sans, Helvetica, sans-serif',
                 rgba: true,
-                width: W,
+                width: 4000,
                 align: 'center',
-                justify: true,
+                spacing: 10
             }
         }).png().toBuffer();
 
+        // ✅ Step 2: Create a course buffer similarly
         const courseBuffer = await sharp({
             text: {
                 text: `<span foreground="#333333"><b>${courseTitle.toUpperCase()}</b></span>`,
-                font: 'sans-serif',
+                font: 'Arial, DejaVu Sans, Liberation Sans, Helvetica, sans-serif',
                 rgba: true,
-                width: W,
-                align: 'center',
-                justify: true,
+                width: 4000,
+                align: 'center'
             }
         }).png().toBuffer();
 
-        // Calibration positions (tuned for Sharp's text engine)
-        const nameTop   = 1300; 
-        const courseTop = 1530; 
-        const qrTop     = 2750; 
-        const qrLeft    = 120;
+        // ✅ Step 3: Simple, fixed vertical positions
+        const nameTop    = 1330; 
+        const courseTop  = 1640; 
+        const qrTop      = 2750; 
+        const qrLeft     = 120;
 
-        console.log(`[Certificate] Finalizing image for: ${safeName}`);
+        console.log(`[Certificate] Rendering text for: ${safeName}`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
 
+        // ✅ Step 4: Composite with left: 0 for perfect centering
         await sharp(templatePath)
             .composite([
                 { input: nameBuffer,   top: nameTop,   left: 0 },
@@ -92,6 +94,8 @@ export async function generateCertificate({
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
+
+
 
         const imageUrl = `/uploads/certificates/${fileName}`;
         await db.insert(certificates).values({
