@@ -1,11 +1,11 @@
 import { db } from '../db/index.js';
-import { 
-    userModuleProgress, 
-    modules, 
-    courses, 
-    quizzes, 
-    quizAttempts, 
-    certificates 
+import {
+    userModuleProgress,
+    modules,
+    courses,
+    quizzes,
+    quizAttempts,
+    certificates
 } from '../db/schema.js';
 import { eq, and, count, inArray, isNotNull, ne } from 'drizzle-orm';
 import { generateCertificateLogic } from './certificate.js';
@@ -32,27 +32,27 @@ export const updateVideoProgress = async (req: AuthRequest, res: Response) => {
 
         if (existing) {
             if (isCompleted === true) {
-                // ✅ Mark as fully watched
+                // ✅ Always allow upgrading to completed
                 await db.update(userModuleProgress)
-                    .set({ 
-                        videoWatched: true, 
+                    .set({
+                        videoWatched: true,
                         lastPosition: Math.floor(lastPosition || 0),
-                        updatedAt: new Date() 
+                        updatedAt: new Date()
                     })
                     .where(eq(userModuleProgress.id, existing.id));
             } else {
-                // ✅ Heartbeat — only update lastPosition, never downgrade videoWatched
+                // ✅ Heartbeat — only update position if not already fully watched
                 if (!existing.videoWatched) {
                     await db.update(userModuleProgress)
-                        .set({ 
+                        .set({
                             lastPosition: Math.floor(lastPosition || 0),
-                            updatedAt: new Date() 
+                            updatedAt: new Date()
                         })
                         .where(eq(userModuleProgress.id, existing.id));
                 }
             }
         } else {
-            // ✅ First time — insert new record
+            // ✅ First time — create fresh record
             await db.insert(userModuleProgress).values({
                 userId,
                 moduleId,
@@ -61,7 +61,7 @@ export const updateVideoProgress = async (req: AuthRequest, res: Response) => {
             });
         }
 
-        // Only check certificate if video was just completed
+        // ✅ Only trigger certificate check on explicit completion
         if (isCompleted === true) {
             const [module] = await db.select({ courseId: modules.courseId })
                 .from(modules)
@@ -102,7 +102,6 @@ export const getUserProgress = async (req: AuthRequest, res: Response) => {
         .innerJoin(courses, eq(modules.courseId, courses.id))
         .where(eq(userModuleProgress.userId, userId));
 
-        // Get all courses with module counts
         const enrolledCourses = await db.select({
             courseId: courses.id,
             courseTitle: courses.title,
@@ -112,7 +111,6 @@ export const getUserProgress = async (req: AuthRequest, res: Response) => {
         .innerJoin(modules, eq(modules.courseId, courses.id))
         .groupBy(courses.id, courses.title);
 
-        // Build course map
         const courseMap: Record<string, {
             courseId: string;
             courseTitle: string;
@@ -188,8 +186,8 @@ export const manualGenerateCertificate = async (req: AuthRequest, res: Response)
             .limit(1);
 
         if (!cert) {
-            return res.status(404).json({ 
-                message: 'Certificate was not found after generation. Please refresh.' 
+            return res.status(404).json({
+                message: 'Certificate was not found after generation. Please refresh.'
             });
         }
 
@@ -208,7 +206,6 @@ export const manualGenerateCertificate = async (req: AuthRequest, res: Response)
 // ─────────────────────────────────────────────
 export const checkAndGenerateCertificate = async (userId: string, courseId: string) => {
     try {
-        // 1. Get all video modules for the course
         const courseModules = await db.select({ id: modules.id })
             .from(modules)
             .where(and(
@@ -222,7 +219,6 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
 
         const moduleIds = courseModules.map(m => m.id);
 
-        // 2. Check watched videos
         const [watchedCountResult] = await db.select({ count: count() })
             .from(userModuleProgress)
             .where(and(
@@ -233,7 +229,6 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
 
         const watchedInThisCourse = Number(watchedCountResult?.count || 0);
 
-        // 3. Check passed quizzes
         const courseQuizzes = await db.select({ id: quizzes.id })
             .from(quizzes)
             .where(inArray(quizzes.moduleId, moduleIds));
@@ -257,20 +252,13 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
         console.log(`[CertDebug] Modules: ${moduleCount}, Watched: ${watchedInThisCourse}`);
         console.log(`[CertDebug] Quizzes: ${quizCount}, Passed: ${passedInThisCourse}`);
 
-        // 4. Validate requirements
         if (watchedInThisCourse < moduleCount) {
-            throw new Error(
-                `Requirements not met: Only ${watchedInThisCourse}/${moduleCount} videos watched.`
-            );
+            throw new Error(`Requirements not met: Only ${watchedInThisCourse}/${moduleCount} videos watched.`);
         }
-
         if (passedInThisCourse < quizCount) {
-            throw new Error(
-                `Requirements not met: Only ${passedInThisCourse}/${quizCount} quizzes passed.`
-            );
+            throw new Error(`Requirements not met: Only ${passedInThisCourse}/${quizCount} quizzes passed.`);
         }
 
-        // 5. Generate certificate if not already exists
         const [existingCert] = await db.select()
             .from(certificates)
             .where(and(
