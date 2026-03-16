@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
+import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
 import { db } from '../db/index.js';
 import { certificates, users, courses } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -49,53 +50,49 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Inline attributes only — librsvg ignores <style> tags
-        // sans-serif is ALWAYS available on any Linux server
-        const nameSvgBuffer = Buffer.from(
-            `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="300">` +
-            `<text ` +
-            `x="${W / 2}" ` +
-            `y="240" ` +
-            `text-anchor="middle" ` +
-            `font-family="sans-serif" ` +
-            `font-size="200" ` +
-            `font-weight="bold" ` +
-            `fill="#1a1a1a" ` +
-            `letter-spacing="6"` +
-            `>${safeName}</text>` +
-            `</svg>`
-        );
+        // ✅ Draw name using @napi-rs/canvas — built-in fonts, no system deps
+        const drawText = (text: string, fontSize: number, canvasW: number, canvasH: number): Buffer => {
+            const canvas = createCanvas(canvasW, canvasH);
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvasW, canvasH);
+            ctx.fillStyle = '#1a1a1a';
+            ctx.font = `bold ${fontSize}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, canvasW / 2, canvasH / 2);
+            return canvas.toBuffer('image/png');
+        };
 
-        const courseSvgBuffer = Buffer.from(
-            `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="160">` +
-            `<text ` +
-            `x="${W / 2}" ` +
-            `y="110" ` +
-            `text-anchor="middle" ` +
-            `font-family="sans-serif" ` +
-            `font-size="80" ` +
-            `font-weight="bold" ` +
-            `fill="#555555" ` +
-            `letter-spacing="3"` +
-            `>${courseTitle}</text>` +
-            `</svg>`
-        );
+        const drawCourseText = (text: string, fontSize: number, canvasW: number, canvasH: number): Buffer => {
+            const canvas = createCanvas(canvasW, canvasH);
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvasW, canvasH);
+            ctx.fillStyle = '#555555';
+            ctx.font = `bold ${fontSize}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, canvasW / 2, canvasH / 2);
+            return canvas.toBuffer('image/png');
+        };
+
+        const nameBuffer   = drawText(safeName, 180, W, 280);
+        const courseBuffer = drawCourseText(courseTitle, 85, W, 160);
 
         const nameTop   = 1068;
         const courseTop = 1360;
         const qrTop     = 2500;
         const qrLeft    = 120;
 
-        console.log(`[Certificate] Rendering: "${safeName}" top:${nameTop}`);
+        console.log(`[Certificate] Rendering name: "${safeName}"`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
 
         await sharp(templatePath)
             .composite([
-                { input: nameSvgBuffer,   top: nameTop,   left: 0 },
-                { input: courseSvgBuffer, top: courseTop, left: 0 },
-                { input: qrBuffer,        top: qrTop,     left: qrLeft },
+                { input: nameBuffer,   top: nameTop,   left: 0 },
+                { input: courseBuffer, top: courseTop, left: 0 },
+                { input: qrBuffer,     top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
