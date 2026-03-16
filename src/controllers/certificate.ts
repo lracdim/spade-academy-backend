@@ -13,6 +13,22 @@ import type { AuthRequest } from '../middleware/auth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ✅ Register fonts explicitly for Windows
+if (process.platform === 'win32') {
+    try {
+        const fontsDir = 'C:\\Windows\\Fonts';
+        if (fs.existsSync(path.join(fontsDir, 'arial.ttf'))) {
+            GlobalFonts.registerFromPath(path.join(fontsDir, 'arial.ttf'), 'Arial');
+        }
+        if (fs.existsSync(path.join(fontsDir, 'arialbd.ttf'))) {
+            GlobalFonts.registerFromPath(path.join(fontsDir, 'arialbd.ttf'), 'ArialBold');
+        }
+        console.log('[Certificate] Fonts registered successfully');
+    } catch (err) {
+        console.error('[Certificate] Font registration warning:', err);
+    }
+}
+
 interface CertParams {
     recipientName: string;
     courseTitle: string;
@@ -50,13 +66,17 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        // ✅ Draw name using @napi-rs/canvas — built-in fonts, no system deps
+        // Use registered fonts if on Windows, else fallback to sans-serif
+        const fontName = process.platform === 'win32' ? 'ArialBold' : 'sans-serif';
+        const courseFontName = process.platform === 'win32' ? 'Arial' : 'sans-serif';
+
+        // ✅ Draw name using @napi-rs/canvas
         const drawText = (text: string, fontSize: number, canvasW: number, canvasH: number): Buffer => {
             const canvas = createCanvas(canvasW, canvasH);
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvasW, canvasH);
             ctx.fillStyle = '#1a1a1a';
-            ctx.font = `bold ${fontSize}px sans-serif`;
+            ctx.font = `bold ${fontSize}px ${fontName}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(text, canvasW / 2, canvasH / 2);
@@ -67,8 +87,8 @@ export async function generateCertificate({
             const canvas = createCanvas(canvasW, canvasH);
             const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvasW, canvasH);
-            ctx.fillStyle = '#555555';
-            ctx.font = `bold ${fontSize}px sans-serif`;
+            ctx.fillStyle = '#1a1a1a'; // Switched to darker for better visibility
+            ctx.font = `bold ${fontSize}px ${courseFontName}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(text, canvasW / 2, canvasH / 2);
@@ -83,7 +103,7 @@ export async function generateCertificate({
         const qrTop     = 2500;
         const qrLeft    = 120;
 
-        console.log(`[Certificate] Rendering name: "${safeName}"`);
+        console.log(`[Certificate] Rendering name: "${safeName}" with font ${fontName}`);
 
         const fileName   = `${certificateNumber}.png`;
         const outputPath = path.join(uploadDir, fileName);
@@ -125,7 +145,8 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         user.email?.split('@')[0]?.replace(/[._-]/g, ' ') ||
         'Security Professional';
 
-    console.log(`[Certificate] Name resolved: "${recipientName}" (raw: "${user.fullName}")`);
+    console.log(`[Certificate] Name resolved: "${recipientName}" (id: ${userId}, raw_full_name: "${user.fullName}")`);
+
 
     const [existing] = await db
         .select()
