@@ -2,7 +2,7 @@ import sharp from 'sharp';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
-import TextToSVG from 'text-to-svg';
+import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
 import { db } from '../db/index.js';
 import { certificates, users, courses } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
@@ -14,7 +14,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const fontPath = path.join(process.cwd(), 'public/fonts/Roboto-Bold.ttf');
-const textToSvg = TextToSVG.loadSync(fontPath);
+let fontName = 'sans-serif';
+if (fs.existsSync(fontPath)) {
+    GlobalFonts.registerFromPath(fontPath, 'Roboto');
+    fontName = 'Roboto';
+}
 
 interface CertParams {
     recipientName: string;
@@ -54,21 +58,23 @@ export async function generateCertificate({
 
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        const nameSvg = textToSvg.getSVG(safeName, {
-            x: 2000,
-            y: 250,
-            fontSize: 200,
-            anchor: 'middle',
-            attributes: { fill: '#000000' }
-        });
+        const nameCanvas = createCanvas(4000, 400);
+        const nameCtx = nameCanvas.getContext('2d');
+        nameCtx.fillStyle = '#000000';
+        nameCtx.font = `bold 200px ${fontName}`;
+        nameCtx.textAlign = 'center';
+        nameCtx.textBaseline = 'middle';
+        nameCtx.fillText(safeName, 2000, 200);
+        const nameBuffer = nameCanvas.toBuffer('image/png');
 
-        const courseSvg = textToSvg.getSVG(courseTitle.toUpperCase(), {
-            x: 2000,
-            y: 100,
-            fontSize: 65,
-            anchor: 'middle',
-            attributes: { fill: '#333333' }
-        });
+        const courseCanvas = createCanvas(4000, 200);
+        const courseCtx = courseCanvas.getContext('2d');
+        courseCtx.fillStyle = '#333333';
+        courseCtx.font = `bold 65px ${fontName}`;
+        courseCtx.textAlign = 'center';
+        courseCtx.textBaseline = 'middle';
+        courseCtx.fillText(courseTitle.toUpperCase(), 2000, 100);
+        const courseBuffer = courseCanvas.toBuffer('image/png');
 
         // Vertical spacing - calibrated to your template
         const nameTop    = 1280; 
@@ -83,9 +89,9 @@ export async function generateCertificate({
 
         await sharp(templatePath)
             .composite([
-                { input: nameSvg,      top: nameTop,   left: 0 },
-                { input: courseSvg,    top: courseTop, left: 0 },
-                { input: qrBuffer,     top: qrTop,     left: qrLeft },
+                { input: nameBuffer,    top: nameTop,   left: 0 },
+                { input: courseBuffer,  top: courseTop, left: 0 },
+                { input: qrBuffer,      top: qrTop,     left: qrLeft },
             ])
             .png({ quality: 100 })
             .toFile(outputPath);
