@@ -13,6 +13,7 @@ export const getCourses = async (req: AuthRequest, res: Response) => {
                 c.title, 
                 c.description, 
                 c.thumbnail, 
+                c.certificate_template as "certificateTemplate",
                 c.is_published as "isPublished", 
                 c.order, 
                 c.created_at as "createdAt",
@@ -40,7 +41,7 @@ export const getCourses = async (req: AuthRequest, res: Response) => {
 };
 
 export const createCourse = async (req: AuthRequest, res: Response) => {
-    const { title, description, isPublished, thumbnail } = req.body;
+    const { title, description, isPublished, thumbnail, certificateTemplate } = req.body;
 
     if (!title || !description) {
         return res.status(400).json({ message: 'Title and description are required' });
@@ -58,6 +59,7 @@ export const createCourse = async (req: AuthRequest, res: Response) => {
             description,
             isPublished: !!isPublished,
             thumbnail: thumbnail || null,
+            certificateTemplate: certificateTemplate || null,
             order: nextOrder,
         }).returning();
 
@@ -70,7 +72,7 @@ export const createCourse = async (req: AuthRequest, res: Response) => {
 
 export const updateCourse = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { title, description, isPublished, thumbnail } = req.body;
+    const { title, description, isPublished, thumbnail, certificateTemplate } = req.body;
 
     try {
         const updateData: any = {};
@@ -78,6 +80,7 @@ export const updateCourse = async (req: AuthRequest, res: Response) => {
         if (description !== undefined) updateData.description = description;
         if (isPublished !== undefined) updateData.isPublished = isPublished;
         if (thumbnail !== undefined) updateData.thumbnail = thumbnail;
+        if (certificateTemplate !== undefined) updateData.certificateTemplate = certificateTemplate;
 
         const courseId = id as string;
 
@@ -97,6 +100,9 @@ export const updateCourse = async (req: AuthRequest, res: Response) => {
 
         if (thumbnail && oldCourse?.thumbnail && oldCourse.thumbnail !== thumbnail) {
             deleteFileFromUrl(oldCourse.thumbnail);
+        }
+        if (certificateTemplate && oldCourse?.certificateTemplate && oldCourse.certificateTemplate !== certificateTemplate) {
+            deleteFileFromUrl(oldCourse.certificateTemplate);
         }
 
         res.json(updatedCourse);

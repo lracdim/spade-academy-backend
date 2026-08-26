@@ -20,6 +20,7 @@ export const courses = pgTable('courses', {
     title: text('title').notNull(),
     description: text('description').notNull(),
     thumbnail: text('thumbnail'),
+    certificateTemplate: text('certificate_template'),
     isPublished: boolean('is_published').default(false).notNull(),
     order: integer('order').notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -88,9 +89,19 @@ export const lessons = pgTable('lessons', {
     moduleId: uuid('module_id').references(() => modules.id).notNull(),
     title: text('title').notNull(),
     content: text('content').notNull(),
+    video: text('video'),
     order: integer('order').notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+export const userLessonProgress = pgTable('user_lesson_progress', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').references(() => users.id).notNull(),
+    lessonId: uuid('lesson_id').references(() => lessons.id).notNull(),
+    completedAt: timestamp('completed_at').defaultNow().notNull(),
+}, (table) => ({
+    unq: unique().on(table.userId, table.lessonId),
+}));
 
 export const notifications = pgTable('notifications', {
     id: uuid('id').primaryKey().defaultRandom(),

@@ -28,6 +28,7 @@ interface CertParams {
     certificateNumber: string;
     userId: string;
     courseId: string;
+    certificateTemplate?: string | null;
 }
 
 export async function generateCertificate({
@@ -37,10 +38,18 @@ export async function generateCertificate({
     verificationUrl,
     certificateNumber,
     userId,
-    courseId
+    courseId,
+    certificateTemplate
 }: CertParams) {
     try {
-        const templatePath = path.join(process.cwd(), 'public/templates/certificate.png');
+        const publicDir = path.join(process.cwd(), 'public');
+        const templateRelativePath = certificateTemplate?.replace(/^https?:\/\/[^/]+/i, '');
+        const templatePath = templateRelativePath
+            ? path.join(publicDir, templateRelativePath)
+            : path.join(publicDir, 'templates/certificate.png');
+        if (!templatePath.startsWith(publicDir) || !fs.existsSync(templatePath)) {
+            throw new Error('Certificate template was not found. Upload a PNG certificate template for this course.');
+        }
         const uploadDir = path.join(process.cwd(), 'public/uploads/certificates');
         
         if (!fs.existsSync(uploadDir)) {
@@ -162,6 +171,7 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
             certificateNumber: certCode,
             userId,
             courseId,
+            certificateTemplate: course.certificateTemplate,
         });
 
         if (oldImageUrl) {

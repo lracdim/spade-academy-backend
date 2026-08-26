@@ -1,5 +1,5 @@
 import { db } from '../db/index.js';
-import { modules, lessons, quizzes, questions, quizAttempts, users, notifications, userModuleProgress } from '../db/schema.js';
+import { modules, lessons, quizzes, questions, quizAttempts, users, notifications, userModuleProgress, userLessonProgress } from '../db/schema.js';
 import { deleteFileFromUrl } from '../utils/file.js';
 import { eq, count, sql, and, inArray } from 'drizzle-orm';
 import type { Response } from 'express';
@@ -49,6 +49,94 @@ export const getModulesByCourse = async (req: AuthRequest, res: Response) => {
         res.json(courseModules);
     } catch (error) {
         console.error('Fetch modules error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getLessonsByModule = async (req: AuthRequest, res: Response) => {
+    const moduleId = req.params.moduleId as string;
+    try {
+        const userId = req.user?.id;
+        const moduleLessons = await db.select({
+            id: lessons.id, moduleId: lessons.moduleId, title: lessons.title, content: lessons.content,
+            video: lessons.video, order: lessons.order, createdAt: lessons.createdAt,
+            completed: sql<boolean>`COALESCE(${userLessonProgress.id} IS NOT NULL, false)`.mapWith(Boolean),
+        }).from(lessons)
+            .leftJoin(userLessonProgress, and(eq(userLessonProgress.lessonId, lessons.id), userId ? eq(userLessonProgress.userId, userId) : sql`false`))
+            .where(eq(lessons.moduleId, moduleId))
+            .orderBy(lessons.order);
+        res.json(moduleLessons);
+    } catch (error) {
+        console.error('Fetch lessons error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const completeLesson = async (req: AuthRequest, res: Response) => {
+    const lessonId = req.params.lessonId as string;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    try {
+        const [lesson] = await db.select().from(lessons).where(eq(lessons.id, lessonId));
+        if (!lesson) return res.status(404).json({ message: 'Lesson not found' });
+        const ordered = await db.select().from(lessons).where(eq(lessons.moduleId, lesson.moduleId)).orderBy(lessons.order);
+        const previous = ordered.filter(item => item.order < lesson.order);
+        if (previous.length) {
+            const completed = await db.select({ lessonId: userLessonProgress.lessonId }).from(userLessonProgress)
+                .where(and(eq(userLessonProgress.userId, userId), inArray(userLessonProgress.lessonId, previous.map(item => item.id))));
+            if (completed.length !== previous.length) return res.status(403).json({ message: 'Complete the previous lesson first' });
+        }
+        await db.insert(userLessonProgress).values({ userId, lessonId }).onConflictDoNothing();
+        res.json({ message: 'Lesson completed' });
+    } catch (error) { console.error('Complete lesson error:', error); res.status(500).json({ message: 'Internal server error' }); }
+};
+
+export const createLesson = async (req: AuthRequest, res: Response) => {
+    const moduleId = req.params.moduleId as string;
+    const { title, content, video } = req.body;
+    if (!title || !content) return res.status(400).json({ message: 'Lesson title and content are required' });
+
+    try {
+        const [maxOrder] = await db.select({ value: sql<number>`MAX(${lessons.order})` })
+            .from(lessons).where(eq(lessons.moduleId, moduleId));
+        const [lesson] = await db.insert(lessons).values({
+            moduleId,
+            title,
+            content,
+            video: video || null,
+            order: (maxOrder?.value || 0) + 1,
+        }).returning();
+        res.status(201).json(lesson);
+    } catch (error) {
+        console.error('Create lesson error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const updateLesson = async (req: AuthRequest, res: Response) => {
+    const lessonId = req.params.lessonId as string;
+    const { title, content, video } = req.body;
+    try {
+        const [lesson] = await db.update(lessons)
+            .set({ ...(title !== undefined ? { title } : {}), ...(content !== undefined ? { content } : {}), ...(video !== undefined ? { video } : {}) })
+            .where(eq(lessons.id, lessonId))
+            .returning();
+        if (!lesson) return res.status(404).json({ message: 'Lesson not found' });
+        res.json(lesson);
+    } catch (error) {
+        console.error('Update lesson error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const deleteLesson = async (req: AuthRequest, res: Response) => {
+    const lessonId = req.params.lessonId as string;
+    try {
+        const [lesson] = await db.delete(lessons).where(eq(lessons.id, lessonId)).returning();
+        if (!lesson) return res.status(404).json({ message: 'Lesson not found' });
+        res.json({ message: 'Lesson deleted successfully' });
+    } catch (error) {
+        console.error('Delete lesson error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
@@ -220,7 +308,7 @@ export const getModuleQuiz = async (req: AuthRequest, res: Response) => {
 export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
     const moduleId = req.params.id as string;
     const userId = req.user?.id;
-    const { score, answers } = req.body; // Removed 'passed' from body to enforce server-side check
+    const { answers } = req.body;
 
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -230,7 +318,24 @@ export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ message: 'Quiz not found for this module.' });
         }
 
-        const passMark = 60; // HARDCODED REQUIREMENT
+        const moduleLessons = await db.select({ id: lessons.id }).from(lessons).where(eq(lessons.moduleId, moduleId));
+        if (moduleLessons.length) {
+            const completedLessons = await db.select({ lessonId: userLessonProgress.lessonId }).from(userLessonProgress)
+                .where(and(eq(userLessonProgress.userId, userId), inArray(userLessonProgress.lessonId, moduleLessons.map(lesson => lesson.id))));
+            if (completedLessons.length !== moduleLessons.length) {
+                return res.status(403).json({ message: 'Complete every lesson before taking this quiz.' });
+            }
+        }
+
+        const quizQuestions = await db.select().from(questions).where(eq(questions.quizId, quiz.id));
+        if (!quizQuestions.length) return res.status(400).json({ message: 'This quiz has no questions.' });
+        const correctCount = quizQuestions.reduce((total, question) => {
+            const options = Array.isArray(question.options) ? question.options as any[] : [];
+            return total + (options.some(option => option.text === answers?.[question.id] && option.isCorrect) ? 1 : 0);
+        }, 0);
+        const score = Math.round((correctCount / quizQuestions.length) * 100);
+
+        const passMark = quiz.passMark;
         const hasPassed = score >= passMark;
 
         // 1. Log this attempt
