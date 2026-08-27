@@ -26,6 +26,7 @@ const __dirname = path.dirname(__filename);
 
 const allowedOrigins = [
   'https://academy.spadesecurityservices.com',
+  'https://spade-academy-frontend.vercel.app',
   'https://spade-academy-frontend-production.up.railway.app',
   'https://spade-academy-backend-production.up.railway.app',
   'http://localhost:5173',
