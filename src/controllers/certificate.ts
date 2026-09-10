@@ -250,6 +250,12 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
                 id: certificates.id,
                 certCode: certificates.certCode,
                 issuedAt: certificates.issuedAt,
+                // The admin console builds its View and Download links as
+                // `${apiOrigin}${cert.imageUrl}`. Leaving this out of the
+                // projection did not fail loudly: it put the string
+                // "undefined" into the URL, and the browser then reported an
+                // unreachable host rather than a missing image.
+                imageUrl: certificates.imageUrl,
                 userName: users.fullName,
                 courseTitle: courses.title,
             })
