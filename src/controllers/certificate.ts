@@ -9,6 +9,8 @@ import { eq, and } from 'drizzle-orm';
 import { fileURLToPath } from 'url';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.js';
+import { layoutForTemplate } from '../utils/certificateLayout.js';
+import { randomInt } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,40 +59,68 @@ export async function generateCertificate({
         }
 
         const W = 4000;
+        const layout = layoutForTemplate(templatePath);
 
         const qrBuffer = await QRCode.toBuffer(verificationUrl, {
             errorCorrectionLevel: 'H',
             margin: 1,
-            width: 320,
+            width: layout.qr.size,
             color: { dark: '#000000', light: '#ffffff' }
         });
 
+        const drawCentered = (text: string, fontSize: number, color: string) => {
+            const height = Math.ceil(fontSize * 2);
+            const canvas = createCanvas(W, height);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.font = `bold ${fontSize}px ${fontName}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, W / 2, height / 2);
+            return canvas.toBuffer('image/png');
+        };
+
+        const drawLeftAligned = (text: string, fontSize: number, color: string) => {
+            const height = Math.ceil(fontSize * 2);
+            const measure = createCanvas(10, 10).getContext('2d');
+            measure.font = `bold ${fontSize}px ${fontName}`;
+            const width = Math.ceil(measure.measureText(text).width) + fontSize;
+            const canvas = createCanvas(width, height);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = color;
+            ctx.font = `bold ${fontSize}px ${fontName}`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 0, height / 2);
+            return canvas.toBuffer('image/png');
+        };
+
         const safeName = (recipientName || 'Unknown Recipient').trim().toUpperCase();
 
-        const nameCanvas = createCanvas(4000, 400);
-        const nameCtx = nameCanvas.getContext('2d');
-        nameCtx.fillStyle = '#000000';
-        nameCtx.font = `bold 200px ${fontName}`;
-        nameCtx.textAlign = 'center';
-        nameCtx.textBaseline = 'middle';
-        nameCtx.fillText(safeName, 2000, 200);
-        const nameBuffer = nameCanvas.toBuffer('image/png');
+        const overlays: sharp.OverlayOptions[] = [
+            {
+                input: drawCentered(safeName, layout.recipientName.fontSize, layout.recipientName.color),
+                top: layout.recipientName.top,
+                left: 0,
+            },
+            { input: qrBuffer, top: layout.qr.top, left: layout.qr.left },
+        ];
 
-        const courseCanvas = createCanvas(4000, 200);
-        const courseCtx = courseCanvas.getContext('2d');
-        courseCtx.fillStyle = '#333333';
-        courseCtx.font = `bold 65px ${fontName}`;
-        courseCtx.textAlign = 'center';
-        courseCtx.textBaseline = 'middle';
-        courseCtx.fillText(courseTitle.toUpperCase(), 2000, 100);
-        const courseBuffer = courseCanvas.toBuffer('image/png');
+        if (layout.courseTitle) {
+            overlays.push({
+                input: drawCentered(courseTitle.toUpperCase(), layout.courseTitle.fontSize, layout.courseTitle.color),
+                top: layout.courseTitle.top,
+                left: 0,
+            });
+        }
 
-        // Vertical spacing - calibrated to your template
-        const nameTop    = 1280; 
-        const courseTop  = 1520; 
-        const qrTop      = 2750; 
-        const qrLeft     = 120;
-
+        if (layout.certNumber) {
+            overlays.push({
+                input: drawLeftAligned(certificateNumber, layout.certNumber.fontSize, layout.certNumber.color),
+                top: layout.certNumber.top,
+                left: layout.certNumber.left,
+            });
+        }
 
         console.log(`[Certificate] Finalizing image for: ${safeName}`);
 
@@ -98,11 +128,7 @@ export async function generateCertificate({
         const outputPath = path.join(uploadDir, fileName);
 
         await sharp(templatePath)
-            .composite([
-                { input: nameBuffer,    top: nameTop,   left: 0 },
-                { input: courseBuffer,  top: courseTop, left: 0 },
-                { input: qrBuffer,      top: qrTop,     left: qrLeft },
-            ])
+            .composite(overlays)
             .png({ quality: 100 })
             .toFile(outputPath);
 
@@ -134,6 +160,27 @@ export async function generateCertificate({
     }
 }
 
+const CERT_CODE_PREFIX = 'SPD';
+const CERT_CODE_DIGITS = 9;
+
+/** Builds a `SPD` + random-digit code, retrying until it does not collide with an issued one. */
+async function generateCertCode(): Promise<string> {
+    for (let attempt = 0; attempt < 10; attempt++) {
+        let digits = '';
+        for (let i = 0; i < CERT_CODE_DIGITS; i++) digits += randomInt(0, 10).toString();
+        const code = `${CERT_CODE_PREFIX}${digits}`;
+
+        const [taken] = await db
+            .select({ id: certificates.id })
+            .from(certificates)
+            .where(eq(certificates.certCode, code))
+            .limit(1);
+
+        if (!taken) return code;
+    }
+    throw new Error('Could not allocate a unique certificate number');
+}
+
 export const generateCertificateLogic = async (userId: string, courseId: string) => {
     const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     const [course] = await db.select().from(courses).where(eq(courses.id, courseId)).limit(1);
@@ -152,8 +199,7 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
         .limit(1);
 
     const oldImageUrl = existing?.imageUrl;
-    const certCode = existing?.certCode
-        ?? `CERT-${userId.slice(0, 4)}-${courseId.slice(0, 4)}-${Date.now().toString().slice(-6)}`.toUpperCase();
+    const certCode = existing?.certCode ?? await generateCertCode();
 
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
     const verificationUrl = `${frontendUrl}/verify-certificate/${certCode}`;
@@ -250,7 +296,9 @@ export const getAllCertificates = async (req: AuthRequest, res: Response) => {
                 id: certificates.id,
                 certCode: certificates.certCode,
                 issuedAt: certificates.issuedAt,
+                imageUrl: certificates.imageUrl,
                 userName: users.fullName,
+                courseName: courses.title,
                 courseTitle: courses.title,
             })
             .from(certificates)
