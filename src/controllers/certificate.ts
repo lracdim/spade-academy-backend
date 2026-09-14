@@ -68,12 +68,19 @@ export async function generateCertificate({
             color: { dark: '#000000', light: '#ffffff' }
         });
 
+        // Text wider than the certificate's inner panel is shrunk to fit rather than clipped by the gold border.
+        const MAX_CENTERED_WIDTH = 3000;
+
         const drawCentered = (text: string, fontSize: number, color: string) => {
             const height = Math.ceil(fontSize * 2);
             const canvas = createCanvas(W, height);
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = color;
             ctx.font = `bold ${fontSize}px ${fontName}`;
+            const textWidth = ctx.measureText(text).width;
+            if (textWidth > MAX_CENTERED_WIDTH) {
+                ctx.font = `bold ${Math.floor(fontSize * MAX_CENTERED_WIDTH / textWidth)}px ${fontName}`;
+            }
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(text, W / 2, height / 2);
