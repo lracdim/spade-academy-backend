@@ -4,6 +4,7 @@ import {
     modules,
     courses,
     quizzes,
+    questions,
     quizAttempts,
     certificates
 } from '../db/schema.js';
@@ -229,8 +230,11 @@ export const checkAndGenerateCertificate = async (userId: string, courseId: stri
 
         const watchedInThisCourse = Number(watchedCountResult?.count || 0);
 
-        const courseQuizzes = await db.select({ id: quizzes.id })
+        // A quiz with no questions cannot be submitted, so requiring it would leave
+        // the course permanently incomplete. Only count quizzes that can be passed.
+        const courseQuizzes = await db.selectDistinct({ id: quizzes.id })
             .from(quizzes)
+            .innerJoin(questions, eq(questions.quizId, quizzes.id))
             .where(inArray(quizzes.moduleId, moduleIds));
 
         const quizIds = courseQuizzes.map(q => q.id);
