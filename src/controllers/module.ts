@@ -318,12 +318,24 @@ export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ message: 'Quiz not found for this module.' });
         }
 
+        // Guards reach a module either through the lesson list (which records
+        // userLessonProgress) or through the course player (which records
+        // userModuleProgress). Either signal counts as having worked through the
+        // module, so accept whichever one the guard's route produced.
         const moduleLessons = await db.select({ id: lessons.id }).from(lessons).where(eq(lessons.moduleId, moduleId));
         if (moduleLessons.length) {
             const completedLessons = await db.select({ lessonId: userLessonProgress.lessonId }).from(userLessonProgress)
                 .where(and(eq(userLessonProgress.userId, userId), inArray(userLessonProgress.lessonId, moduleLessons.map(lesson => lesson.id))));
+
             if (completedLessons.length !== moduleLessons.length) {
-                return res.status(403).json({ message: 'Complete every lesson before taking this quiz.' });
+                const [moduleWatched] = await db.select({ videoWatched: userModuleProgress.videoWatched })
+                    .from(userModuleProgress)
+                    .where(and(eq(userModuleProgress.userId, userId), eq(userModuleProgress.moduleId, moduleId)))
+                    .limit(1);
+
+                if (!moduleWatched?.videoWatched) {
+                    return res.status(403).json({ message: 'Complete every lesson before taking this quiz.' });
+                }
             }
         }
 
