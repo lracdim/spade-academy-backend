@@ -5,6 +5,7 @@ import {
     courses,
     quizzes,
     questions,
+    lessons,
     quizAttempts,
     certificates
 } from '../db/schema.js';
@@ -207,16 +208,31 @@ export const manualGenerateCertificate = async (req: AuthRequest, res: Response)
 // ─────────────────────────────────────────────
 export const checkAndGenerateCertificate = async (userId: string, courseId: string) => {
     try {
-        const courseModules = await db.select({ id: modules.id })
+        // A module carries its video either on the module itself or on its lessons,
+        // depending on how the course was authored. Both count as watchable content.
+        const allModules = await db.select({ id: modules.id, video: modules.video })
             .from(modules)
+            .where(eq(modules.courseId, courseId));
+
+        if (allModules.length === 0) {
+            throw new Error('Requirements not met: this course has no modules yet.');
+        }
+
+        const modulesWithLessonVideo = await db.selectDistinct({ moduleId: lessons.moduleId })
+            .from(lessons)
             .where(and(
-                eq(modules.courseId, courseId),
-                isNotNull(modules.video),
-                ne(modules.video, '')
+                inArray(lessons.moduleId, allModules.map(m => m.id)),
+                isNotNull(lessons.video),
+                ne(lessons.video, '')
             ));
+        const hasLessonVideo = new Set(modulesWithLessonVideo.map(row => row.moduleId));
+
+        const courseModules = allModules.filter(m => (m.video && m.video.trim() !== '') || hasLessonVideo.has(m.id));
 
         const moduleCount = courseModules.length;
-        if (moduleCount === 0) return;
+        if (moduleCount === 0) {
+            throw new Error('Requirements not met: no module in this course has a video yet.');
+        }
 
         const moduleIds = courseModules.map(m => m.id);
 
