@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.js';
 import { layoutForTemplate } from '../utils/certificateLayout.js';
+import { deleteObject, isStorageConfigured, putObject } from '../utils/storage.js';
 import { randomInt } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -132,17 +133,25 @@ export async function generateCertificate({
         console.log(`[Certificate] Finalizing image for: ${safeName}`);
 
         const fileName   = `${certificateNumber}.png`;
-        const outputPath = path.join(uploadDir, fileName);
+        const imagePath  = `/uploads/certificates/${fileName}`;
 
-        await sharp(templatePath)
+        const rendered = await sharp(templatePath)
             .composite(overlays)
             .png({ quality: 100 })
-            .toFile(outputPath);
+            .toBuffer();
+
+        // The container's disk is wiped on every deploy, so certificates belong in
+        // object storage whenever it is configured; disk is the local fallback.
+        if (isStorageConfigured) {
+            await putObject(imagePath, rendered, 'image/png');
+        } else {
+            fs.writeFileSync(path.join(uploadDir, fileName), rendered);
+        }
 
 
 
 
-        const imageUrl = `/uploads/certificates/${fileName}`;
+        const imageUrl = imagePath;
         await db.insert(certificates).values({
             userId,
             courseId,
@@ -227,7 +236,10 @@ export const generateCertificateLogic = async (userId: string, courseId: string)
             certificateTemplate: course.certificateTemplate,
         });
 
-        if (oldImageUrl) {
+        if (oldImageUrl && oldImageUrl !== result.imageUrl) {
+            if (isStorageConfigured) {
+                await deleteObject(oldImageUrl);
+            }
             const oldFilePath = path.join(process.cwd(), 'public', oldImageUrl.replace(/^\/uploads\//, 'uploads/'));
             try {
                 if (fs.existsSync(oldFilePath)) {

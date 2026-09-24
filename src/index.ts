@@ -17,6 +17,7 @@ import progressRoutes from './routes/progress.js';
 import certificateRoutes from './routes/certificate.js';
 
 import { PORT } from './config.js';
+import { isStorageConfigured, objectExists, signedUrlFor } from './utils/storage.js';
 
 const app = express();
 const port: number = Number(PORT) || 5000;
@@ -45,6 +46,20 @@ app.options('/{*path}', cors(corsOptions));
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+
+// Files served from object storage. express.static above still answers for anything
+// left on disk, so URLs issued before the bucket existed keep working.
+app.get('/uploads/{*filePath}', async (req, res, next) => {
+  if (!isStorageConfigured) return next();
+  const uploadPath = decodeURIComponent(req.path);
+  try {
+    if (!(await objectExists(uploadPath))) return next();
+    return res.redirect(await signedUrlFor(uploadPath));
+  } catch (error) {
+    console.error('[Storage] Failed to serve object:', uploadPath, error);
+    return next();
+  }
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
