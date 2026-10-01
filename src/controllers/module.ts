@@ -380,6 +380,7 @@ export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
 
         // 2. Logic for Failure & Re-take limit (5 Strikes)
         let wasReset = false;
+        let attemptsUsed = 0;
         if (!hasPassed) {
             // Count total attempts for THIS quiz for THIS user
             const [totalAttemptsResult] = await db.select({ value: count() })
@@ -387,6 +388,7 @@ export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
                 .where(and(eq(quizAttempts.userId, userId), eq(quizAttempts.quizId, quiz.id)));
             
             const attemptsCount = Number(totalAttemptsResult?.value || 0);
+            attemptsUsed = attemptsCount;
             console.log(`[Quiz] Guard ${userId} failed attempt #${attemptsCount} for quiz ${quiz.id}`);
 
             if (attemptsCount >= 5) {
@@ -471,7 +473,7 @@ export const submitModuleQuiz = async (req: AuthRequest, res: Response) => {
             }
         }
 
-        res.json({ ...attempt, wasReset });
+        res.json({ ...attempt, wasReset, attemptsUsed, maxAttempts: 5, passMark });
     } catch (error) {
         console.error('Submit quiz error:', error);
         res.status(500).json({ message: 'Internal server error' });
