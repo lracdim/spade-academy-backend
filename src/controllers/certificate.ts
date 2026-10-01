@@ -292,6 +292,7 @@ export const verifyCertificate = async (req: AuthRequest, res: Response) => {
             .select({
                 certCode: certificates.certCode,
                 issuedAt: certificates.issuedAt,
+                imageUrl: certificates.imageUrl,
                 userName: users.fullName,
                 courseTitle: courses.title,
             })
