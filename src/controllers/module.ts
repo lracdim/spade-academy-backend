@@ -36,6 +36,25 @@ export const getModulesByCourse = async (req: AuthRequest, res: Response) => {
                 AND qa.passed = true
             )`.mapWith(Boolean),
             lessonCount: sql<number>`(SELECT COUNT(*) FROM lessons WHERE module_id = ${modules.id})`.mapWith(Number),
+            lessonsCompleted: sql<number>`(
+                SELECT COUNT(*) FROM user_lesson_progress ulp
+                JOIN lessons l ON ulp.lesson_id = l.id
+                WHERE l.module_id = ${modules.id}
+                AND ulp.user_id = ${userId || sql`NULL`}
+            )`.mapWith(Number),
+            quizAttempts: sql<number>`(
+                SELECT COUNT(*) FROM quiz_attempts qa
+                JOIN quizzes q ON qa.quiz_id = q.id
+                WHERE q.module_id = ${modules.id}
+                AND qa.user_id = ${userId || sql`NULL`}
+            )`.mapWith(Number),
+            bestScore: sql<number>`(
+                SELECT COALESCE(MAX(qa.score), 0) FROM quiz_attempts qa
+                JOIN quizzes q ON qa.quiz_id = q.id
+                WHERE q.module_id = ${modules.id}
+                AND qa.user_id = ${userId || sql`NULL`}
+            )`.mapWith(Number),
+            passMark: sql<number>`(SELECT COALESCE(MAX(pass_mark), 70) FROM quizzes WHERE module_id = ${modules.id})`.mapWith(Number),
         })
             .from(modules)
             .leftJoin(userModuleProgress, and(
