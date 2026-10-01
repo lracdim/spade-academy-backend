@@ -1,6 +1,6 @@
 import { db } from '../db/index.js';
-import { users, userModuleProgress, quizAttempts, modules, quizzes, certificates, notifications } from '../db/schema.js';
-import { eq, and, count, sql, countDistinct, isNotNull, ne } from 'drizzle-orm';
+import { users, userModuleProgress, quizAttempts, modules, quizzes, certificates, notifications, courses } from '../db/schema.js';
+import { eq, and, count, sql, countDistinct, isNotNull, ne, desc } from 'drizzle-orm';
 import type { Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.js';
 import { hashPassword } from '../utils/auth.js';
@@ -186,6 +186,120 @@ export const deleteUser = async (req: AuthRequest, res: Response) => {
         res.json({ message: 'User deleted successfully' });
     } catch (error) {
         console.error('Delete user error:', error);
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+export const getGuardProfile = async (req: AuthRequest, res: Response) => {
+    const guardId = req.params.id as string;
+
+    try {
+        const [guard] = await db.select({
+            id: users.id,
+            employeeId: users.employeeId,
+            fullName: users.fullName,
+            email: users.email,
+            role: users.role,
+            isActive: users.isActive,
+            createdAt: users.createdAt,
+        }).from(users).where(eq(users.id, guardId)).limit(1);
+
+        if (!guard) return res.status(404).json({ message: 'Guard not found' });
+
+        // Watch time comes from the player's progress pings, which record how far
+        // into each module video the guard has reached.
+        const progressRows = await db.select({
+            moduleId: userModuleProgress.moduleId,
+            videoWatched: userModuleProgress.videoWatched,
+            lastPosition: userModuleProgress.lastPosition,
+            updatedAt: userModuleProgress.updatedAt,
+            moduleTitle: modules.title,
+            courseId: modules.courseId,
+            courseTitle: courses.title,
+        })
+            .from(userModuleProgress)
+            .innerJoin(modules, eq(userModuleProgress.moduleId, modules.id))
+            .innerJoin(courses, eq(modules.courseId, courses.id))
+            .where(eq(userModuleProgress.userId, guardId));
+
+        const attempts = await db.select({
+            id: quizAttempts.id,
+            score: quizAttempts.score,
+            passed: quizAttempts.passed,
+            attemptedAt: quizAttempts.attemptedAt,
+            moduleTitle: modules.title,
+            courseTitle: courses.title,
+        })
+            .from(quizAttempts)
+            .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+            .innerJoin(modules, eq(quizzes.moduleId, modules.id))
+            .innerJoin(courses, eq(modules.courseId, courses.id))
+            .where(eq(quizAttempts.userId, guardId))
+            .orderBy(desc(quizAttempts.attemptedAt));
+
+        const earnedCertificates = await db.select({
+            id: certificates.id,
+            certCode: certificates.certCode,
+            issuedAt: certificates.issuedAt,
+            imageUrl: certificates.imageUrl,
+            courseTitle: courses.title,
+        })
+            .from(certificates)
+            .innerJoin(courses, eq(certificates.courseId, courses.id))
+            .where(eq(certificates.userId, guardId));
+
+        const allCourses = await db.select({
+            courseId: courses.id,
+            courseTitle: courses.title,
+            moduleId: modules.id,
+        }).from(courses).innerJoin(modules, eq(modules.courseId, courses.id));
+
+        const passedModuleIds = new Set(
+            attempts.filter(attempt => attempt.passed).map(attempt => attempt.moduleTitle)
+        );
+        const watchedModuleIds = new Set(
+            progressRows.filter(row => row.videoWatched).map(row => row.moduleId)
+        );
+
+        const courseMap = new Map<string, { courseId: string; courseTitle: string; totalModules: number; watchedModules: number; passedQuizzes: number }>();
+        for (const row of allCourses) {
+            const entry = courseMap.get(row.courseId)
+                ?? { courseId: row.courseId, courseTitle: row.courseTitle, totalModules: 0, watchedModules: 0, passedQuizzes: 0 };
+            entry.totalModules += 1;
+            if (watchedModuleIds.has(row.moduleId)) entry.watchedModules += 1;
+            courseMap.set(row.courseId, entry);
+        }
+
+        const courseProgress = [...courseMap.values()].map(course => ({
+            ...course,
+            completionPercent: course.totalModules > 0
+                ? Math.round((course.watchedModules / course.totalModules) * 100)
+                : 0,
+        }));
+
+        const watchSeconds = progressRows.reduce((total, row) => total + (row.lastPosition || 0), 0);
+        const scores = attempts.map(attempt => attempt.score);
+        const lastActivity = [...progressRows.map(r => r.updatedAt), ...attempts.map(a => a.attemptedAt)]
+            .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+
+        res.json({
+            guard,
+            summary: {
+                watchSeconds,
+                totalAttempts: attempts.length,
+                passedAttempts: attempts.filter(a => a.passed).length,
+                averageScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0,
+                certificatesEarned: earnedCertificates.length,
+                modulesCompleted: watchedModuleIds.size,
+                lastActivity,
+            },
+            courseProgress,
+            attempts,
+            certificates: earnedCertificates,
+            unusedPassedModules: passedModuleIds.size,
+        });
+    } catch (error) {
+        console.error('Get guard profile error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
