@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { comparePassword, generateAccessToken, generateRefreshToken } from '../utils/auth.js';
+import { comparePassword, generateAccessToken, generateRefreshToken, hashPassword } from '../utils/auth.js';
 
 export const login = async (req: Request, res: Response) => {
     const { employeeId, password } = req.body;
@@ -54,9 +54,51 @@ export const getMe = async (req: any, res: Response) => {
             id: user.id,
             employeeId: user.employeeId,
             fullName: user.fullName,
+            email: user.email,
             role: user.role,
         });
     } catch (error) {
+        res.status(500).json({ message: 'Internal server error' });
+    }
+};
+
+const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Lets a signed-in user replace their own password. The current password is
+ * required, so a stolen token or an unlocked phone alone cannot take an account over.
+ */
+export const changePassword = async (req: any, res: Response) => {
+    const { currentPassword, newPassword } = req.body ?? {};
+
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || !currentPassword || !newPassword) {
+        return res.status(400).json({ message: 'Current password and new password are required' });
+    }
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ message: `New password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+    }
+    if (newPassword === currentPassword) {
+        return res.status(400).json({ message: 'New password must be different from the current one' });
+    }
+
+    try {
+        const [user] = await db.select().from(users).where(eq(users.id, req.user.id)).limit(1);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Same acceptance rule as login, so accounts created with a plaintext
+        // password can still move to a hashed one.
+        const matches = (await comparePassword(currentPassword, user.password)) || currentPassword === user.password;
+        if (!matches) {
+            return res.status(401).json({ message: 'Current password is incorrect' });
+        }
+
+        await db.update(users)
+            .set({ password: await hashPassword(newPassword) })
+            .where(eq(users.id, user.id));
+
+        res.json({ message: 'Password updated' });
+    } catch (error) {
+        console.error('Change password error:', error);
         res.status(500).json({ message: 'Internal server error' });
     }
 };
