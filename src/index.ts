@@ -45,7 +45,12 @@ app.use(cors(corsOptions));
 app.options('/{*path}', cors(corsOptions));
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+// Uploaded files carry a unique name, so they can be cached hard. Without this
+// every replay re-downloads the whole video.
+app.use(express.static(path.join(__dirname, '../public'), {
+  maxAge: '365d',
+  immutable: true,
+}));
 
 // Files served from object storage. express.static above still answers for anything
 // left on disk, so URLs issued before the bucket existed keep working.
