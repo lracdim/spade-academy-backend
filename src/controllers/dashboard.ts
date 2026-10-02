@@ -102,7 +102,9 @@ export const getGuardDashboardStats = async (req: AuthRequest, res: Response) =>
 
         console.log(`[Dashboard] Starting stats fetch for user: ${userId}`);
 
-        const [totalCoursesResult] = await db.select({ value: count() }).from(courses);
+        // A draft course is not available to guards, so it must not count or be suggested.
+        const [totalCoursesResult] = await db.select({ value: count() }).from(courses)
+            .where(eq(courses.isPublished, true));
         const totalCoursesCount = Number(totalCoursesResult?.value || 0);
 
         const [userCertificatesResult] = await db.select({ value: count() })
@@ -224,9 +226,18 @@ export const getGuardDashboardStats = async (req: AuthRequest, res: Response) =>
             continueCourseId = mod?.courseId || null;
         }
 
+        if (continueCourseId) {
+            const [lastCourse] = await db.select({ isPublished: courses.isPublished })
+                .from(courses)
+                .where(eq(courses.id, continueCourseId))
+                .limit(1);
+            if (!lastCourse?.isPublished) continueCourseId = null;
+        }
+
         if (!continueCourseId && totalCoursesCount > 0) {
             const [first] = await db.select({ id: courses.id })
                 .from(courses)
+                .where(eq(courses.isPublished, true))
                 .orderBy(sql`${courses.order} ASC`)
                 .limit(1);
             continueCourseId = first?.id || null;
