@@ -1,14 +1,35 @@
 import type { Request, Response } from 'express';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { comparePassword, generateAccessToken, generateRefreshToken, hashPassword } from '../utils/auth.js';
 
 export const login = async (req: Request, res: Response) => {
-    const { employeeId, password } = req.body;
+    // The field is still called employeeId so older clients keep working, but it
+    // may hold either a badge number or an email address.
+    const { employeeId, password } = req.body ?? {};
+    const identifier = typeof employeeId === 'string' ? employeeId.trim() : '';
+
+    if (!identifier || typeof password !== 'string' || !password) {
+        return res.status(401).json({ message: 'Invalid employee ID or password' });
+    }
 
     try {
-        const [user] = await db.select().from(users).where(eq(users.employeeId, employeeId)).limit(1);
+        let user;
+        if (identifier.includes('@')) {
+            // Emails are stored lowercase and are unique, so compare case-insensitively.
+            [user] = await db.select().from(users)
+                .where(sql`lower(${users.email}) = ${identifier.toLowerCase()}`)
+                .limit(1);
+        } else {
+            [user] = await db.select().from(users).where(eq(users.employeeId, identifier)).limit(1);
+            if (!user) {
+                // Guards type badge numbers by hand: allow spd_431 for SPD_431.
+                [user] = await db.select().from(users)
+                    .where(sql`upper(${users.employeeId}) = ${identifier.toUpperCase()}`)
+                    .limit(1);
+            }
+        }
 
         if (!user) {
             return res.status(401).json({ message: 'Invalid employee ID or password' });
