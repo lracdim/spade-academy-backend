@@ -45,26 +45,46 @@ app.use(cors(corsOptions));
 app.options('/{*path}', cors(corsOptions));
 
 app.use(express.json());
+
+// Files that live in object storage are answered first by redirecting to a signed
+// link, so guards download them from the bucket and not through this server. A file
+// is only redirected once its copy exists there; anything else falls through to the
+// disk below, which is what lets videos move over one at a time.
+const storageLookup = new Map<string, { found: boolean; until: number }>();
+const FOUND_TTL_MS = 10 * 60 * 1000;
+const MISSING_TTL_MS = 60 * 1000;
+const MAX_LOOKUPS = 5000;
+
+const isInStorage = async (uploadPath: string) => {
+  const cached = storageLookup.get(uploadPath);
+  if (cached && cached.until > Date.now()) return cached.found;
+
+  const found = await objectExists(uploadPath);
+  if (storageLookup.size >= MAX_LOOKUPS) storageLookup.clear();
+  storageLookup.set(uploadPath, { found, until: Date.now() + (found ? FOUND_TTL_MS : MISSING_TTL_MS) });
+  return found;
+};
+
+app.get('/uploads/{*filePath}', async (req, res, next) => {
+  if (!isStorageConfigured) return next();
+  try {
+    const uploadPath = decodeURIComponent(req.path);
+    if (!(await isInStorage(uploadPath))) return next();
+    // Shorter than the signed link's lifetime, so a cached redirect never points at an expired one.
+    res.set('Cache-Control', 'private, max-age=1800');
+    return res.redirect(302, await signedUrlFor(uploadPath));
+  } catch (error) {
+    console.error('[Storage] Failed to serve object:', req.path, error);
+    return next();
+  }
+});
+
 // Uploaded files carry a unique name, so they can be cached hard. Without this
 // every replay re-downloads the whole video.
 app.use(express.static(path.join(__dirname, '../public'), {
   maxAge: '365d',
   immutable: true,
 }));
-
-// Files served from object storage. express.static above still answers for anything
-// left on disk, so URLs issued before the bucket existed keep working.
-app.get('/uploads/{*filePath}', async (req, res, next) => {
-  if (!isStorageConfigured) return next();
-  const uploadPath = decodeURIComponent(req.path);
-  try {
-    if (!(await objectExists(uploadPath))) return next();
-    return res.redirect(await signedUrlFor(uploadPath));
-  } catch (error) {
-    console.error('[Storage] Failed to serve object:', uploadPath, error);
-    return next();
-  }
-});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
